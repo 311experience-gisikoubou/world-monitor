@@ -60,6 +60,9 @@ const blockerSignature = argValue('--blocker-signature', '').trim();
 const failureSignature = argValue('--failure-signature', '').trim();
 const observationSignature = argValue('--observation-signature', '').trim();
 const routeSignature = argValue('--route-signature', '').trim();
+const interactionSignal = argValue('--interaction-signal', 'none').trim().toLowerCase();
+const interactionKey = argValue('--interaction-key', '').trim();
+const goalAlignment = argValue('--goal-alignment', 'aligned').trim().toLowerCase();
 const continuationTaskId = argValue('--continuation-task-id', '').trim();
 const continuationProcessId = argValue('--continuation-process-id', '').trim();
 const continuationStage = argValue('--continuation-stage', '').trim();
@@ -116,6 +119,10 @@ if (!['unknown','yes','no'].includes(prDraft)) stop('--pr-draft invalid');
 if (!['not-run','pass','fail','unknown'].includes(finalAuditState)) stop('--final-audit-state invalid');
 if (!['not-verified','verified','unknown'].includes(exactPrHeadState)) stop('--exact-pr-head-state invalid');
 if (!['product', 'all'].includes(fingerprintScope)) stop('--fingerprint-scope must be product|all');
+if (!['none','user-correction','reference-miss','repeated-status','timeout-repeat','reasked-known'].includes(interactionSignal)) stop('--interaction-signal invalid');
+if (interactionSignal !== 'none' && !interactionKey) stop('--interaction-key required when interaction signal is set');
+if (interactionKey.length > 256) stop('--interaction-key too long');
+if (!['aligned','supporting','unknown','drift'].includes(goalAlignment)) stop('--goal-alignment invalid');
 if (!['none', 'open', 'ready', 'merged', 'closed', 'unknown'].includes(prState)) stop('--pr-state invalid');
 if (!['idle', 'in-progress', 'passed', 'failed', 'cancelled', 'unknown'].includes(workflowStatus)) {
   stop('--workflow-status invalid');
@@ -223,8 +230,20 @@ const baseState = {
   unchangedCheckpoints: 0,
   level: 'CLEAR',
   requiredAction: 'continue',
+  interaction: null,
   updatedAt: isoNow,
 };
+
+const priorInteraction = previous?.interaction && typeof previous.interaction === 'object' ? previous.interaction : null;
+let interaction = priorInteraction;
+if (interactionSignal !== 'none') {
+  const same = priorInteraction?.signal === interactionSignal && priorInteraction?.key === interactionKey;
+  const count = same ? Math.min(999, Number(priorInteraction?.count || 0) + 1) : 1;
+  let state = 'NORMAL';
+  if (count >= 3) state = 'STOP_AND_DIAGNOSE';
+  else if (count >= 2 || ['user-correction','reference-miss','reasked-known'].includes(interactionSignal)) state = 'SUSPICIOUS';
+  interaction = { signal:interactionSignal, key:interactionKey, count, state, updatedAt:isoNow };
+}
 
 const previousPlatformCheckpoint = previous?.level === 'PLATFORM_TURN_BOUNDARY' ? previous.continuationCheckpoint : null;
 const expectedPlatformCheckpointReceipt = previousPlatformCheckpoint ? receipt('platform-turn-boundary', {
@@ -249,6 +268,31 @@ if (workState === 'complete') {
   code = 'WORK_COMPLETE';
   nextState = { ...baseState, level: 'COMPLETE', requiredAction: 'none' };
   handoffClass = 'COMPLETE';
+} else if (goalAlignment === 'drift') {
+  result = 'STOP';
+  code = 'GOAL_DRIFT_STOP_AND_DIAGNOSE';
+  nextState = { ...(previous ?? baseState), workId, lastCheckpointAt:isoNow, updatedAt:isoNow, level:'HARD_STOP', requiredAction:'re-align-with-current-goal' };
+  handoffClass = 'AI_OWNED';
+} else if (goalAlignment === 'unknown') {
+  result = 'STOP';
+  code = 'GOAL_ALIGNMENT_UNKNOWN_DIAGNOSE_REQUIRED';
+  nextState = { ...(previous ?? baseState), workId, lastCheckpointAt:isoNow, updatedAt:isoNow, level:'L1', requiredAction:'re-read-current-goal' };
+  handoffClass = 'AI_OWNED';
+} else if (interactionSignal !== 'none' && interaction?.count >= 3) {
+  result = 'STOP';
+  code = 'INTERACTION_STOP_AND_DIAGNOSE';
+  nextState = { ...(previous ?? baseState), workId, lastCheckpointAt:isoNow, updatedAt:isoNow, level:'HARD_STOP', requiredAction:'root-cause-analysis', interaction };
+  handoffClass = 'AI_OWNED';
+} else if (interactionSignal !== 'none' && interaction?.count >= 2) {
+  result = 'STOP';
+  code = 'INTERACTION_SUSPICIOUS_DIAGNOSE_REQUIRED';
+  nextState = { ...(previous ?? baseState), workId, lastCheckpointAt:isoNow, updatedAt:isoNow, level:'L2', requiredAction:'diagnose-before-retry', interaction };
+  handoffClass = 'AI_OWNED';
+} else if (interaction?.count === 1 && ['user-correction','reference-miss','reasked-known'].includes(interactionSignal)) {
+  result = 'STOP';
+  code = 'INTERACTION_SUSPICIOUS_REANCHOR_REQUIRED';
+  nextState = { ...(previous ?? baseState), workId, lastCheckpointAt:isoNow, updatedAt:isoNow, level:'L1', requiredAction:'reload-project-memory-before-retry', interaction };
+  handoffClass = 'AI_OWNED';
 } else if (completionTarget === 'pre-merge' && preMergeTechnicalReady && humanGate === 'required' && humanGateKind === 'merge-authorization') {
   handoffClass = 'MERGE_AUTH_REQUIRED';
   if (continuationAction !== 'wait-human') {
@@ -375,6 +419,13 @@ if (workState === 'complete') {
   }
 }
 
+if (interactionSignal !== 'none' && code !== 'MEANINGFUL_PROGRESS_DETECTED' && workState !== 'complete') {
+  nextState = { ...nextState, interaction };
+}
+if (code === 'MEANINGFUL_PROGRESS_DETECTED') {
+  nextState = { ...nextState, interaction:null };
+  interaction = null;
+}
 
 let responseMayTerminate = terminalState !== 'AI_CONTINUES';
 let resumeRequired = false;
@@ -430,6 +481,11 @@ const output = {
   failureSignature: failureSignature || null,
   observationSignature: observationSignature || null,
   routeSignature: routeSignature || null,
+  interactionSignal: interactionSignal === 'none' ? null : interactionSignal,
+  interactionKey: interactionSignal === 'none' ? null : interactionKey,
+  interactionState: interaction?.state ?? 'NORMAL',
+  interactionCount: interaction?.count ?? 0,
+  goalAlignment,
   prState,
   workflowStatus,
   workState,

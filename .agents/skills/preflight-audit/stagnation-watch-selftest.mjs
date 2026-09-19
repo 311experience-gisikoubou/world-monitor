@@ -113,6 +113,35 @@ if (jumped.status !== 2 || !jumped.stdout.includes('STAGNATION_HARD_STOP_ROUTE_C
 const persisted = JSON.parse(await readFile(statePath, 'utf8'));
 if (persisted.unchangedCheckpoints < 3) throw new Error('missed-window checkpoints not persisted');
 
+// Conversation-level anomaly signals escalate before a blind third retry.
+function interactionRun(workId, signal, key, now, expectStatus = 0, extra = []) {
+  const r = spawnSync(process.execPath, [
+    watcher, '--target-root', root, '--work-id', workId, '--gate-phase', 'interaction',
+    '--work-state', 'incomplete', '--human-gate', 'none', '--continuation-action', 'resume',
+    '--workflow-status', 'idle', '--pr-state', 'none', '--failure-signature', '',
+    '--route-signature', 'same-route', '--interval-minutes', '60', '--now', now,
+    '--interaction-signal', signal, '--interaction-key', key, ...extra,
+  ], { encoding:'utf8' });
+  if (r.status !== expectStatus) throw new Error('interaction status '+r.status+' expected '+expectStatus+': '+r.stdout+' '+r.stderr);
+  return JSON.parse(r.stdout);
+}
+let ix = interactionRun('interaction-correction','user-correction','design-reference','2026-09-03T16:00:00Z',2);
+if (ix.code !== 'INTERACTION_SUSPICIOUS_REANCHOR_REQUIRED' || ix.interactionState !== 'SUSPICIOUS' || ix.interactionCount !== 1 || ix.nextState.requiredAction !== 'reload-project-memory-before-retry') throw new Error(JSON.stringify(ix));
+ix = interactionRun('interaction-correction','user-correction','design-reference','2026-09-03T16:01:00Z',2);
+if (ix.code !== 'INTERACTION_SUSPICIOUS_DIAGNOSE_REQUIRED' || ix.interactionState !== 'SUSPICIOUS' || ix.interactionCount !== 2 || ix.nextState.requiredAction !== 'diagnose-before-retry') throw new Error(JSON.stringify(ix));
+ix = interactionRun('interaction-correction','user-correction','design-reference','2026-09-03T16:02:00Z',2);
+if (ix.code !== 'INTERACTION_STOP_AND_DIAGNOSE' || ix.interactionState !== 'STOP_AND_DIAGNOSE' || ix.interactionCount !== 3 || ix.nextState.requiredAction !== 'root-cause-analysis') throw new Error(JSON.stringify(ix));
+
+ix = interactionRun('interaction-status','repeated-status','task-44','2026-09-03T16:10:00Z');
+if (ix.interactionState !== 'NORMAL' || ix.interactionCount !== 1) throw new Error(JSON.stringify(ix));
+ix = interactionRun('interaction-status','repeated-status','task-44','2026-09-03T16:11:00Z',2);
+if (ix.code !== 'INTERACTION_SUSPICIOUS_DIAGNOSE_REQUIRED' || ix.interactionState !== 'SUSPICIOUS' || ix.interactionCount !== 2) throw new Error(JSON.stringify(ix));
+
+const drift = interactionRun('goal-drift','reference-miss','final-design','2026-09-03T16:20:00Z',2,['--goal-alignment','drift']);
+if (drift.code !== 'GOAL_DRIFT_STOP_AND_DIAGNOSE' || drift.goalAlignment !== 'drift' || drift.nextState.requiredAction !== 're-align-with-current-goal') throw new Error(JSON.stringify(drift));
+const unknownGoal = interactionRun('goal-unknown','reference-miss','final-design','2026-09-03T16:21:00Z',2,['--goal-alignment','unknown']);
+if (unknownGoal.code !== 'GOAL_ALIGNMENT_UNKNOWN_DIAGNOSE_REQUIRED' || unknownGoal.nextState.requiredAction !== 're-read-current-goal') throw new Error(JSON.stringify(unknownGoal));
+
 // Remote-only callers can round-trip state as JSON without local writes.
 const remoteBase = spawnSync(process.execPath, [
   watcher, '--target-root', root, '--work-id', 'remote-1', '--gate-phase', 'audit',

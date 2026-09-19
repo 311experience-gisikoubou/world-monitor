@@ -40,6 +40,27 @@ It fixes (all identity text must be resolved; placeholder-only values such as `U
 
 Project Root identity changes only by an explicit human project-ownership/goal decision. The guard has no automatic context-transition mode. A canonical `PROJECT_CONTEXT.json` identity change is a separate human-gated project-definition change; recent work volume, current branch, task duration, latest PR, or last-touched repository never changes it.
 
+## Project-local Working Memory
+
+Project Context validates **which project** is active; it does not retain mutable human decisions or approved references. When a local repository execution route is available, use the sibling `project-working-memory.mjs` after Project Context validation so those decisions survive chat/session loss without becoming common/global memory.
+
+The live file is `.ai/working/project-memory.json`. The helper binds it to the committed Project Context ID/fingerprint and exact GitHub origin, adds `/.ai/working/` only to the repository-local `.git/info/exclude`, and refuses a tracked or cross-project memory file. Do not place patient, clinic, billing, sales, credential, protected, or other real sensitive data in it.
+
+At task start, resume, or before answering "前のやつ / 前に決めたもの", run `ensure` then `snapshot` when this local route is available. The snapshot surfaces exactly the operational fields needed to re-anchor work: Current Goal, Approved Reference, Last Human Decision, and Next Step.
+
+When the human explicitly adopts, rejects, defers, or changes a value/specification choice, record that decision promptly. AI inference must never be recorded with `source: EXPLICIT_HUMAN`. References use these evidence classes:
+
+- `VERIFIED`: confirmed by an actual file, UI observation, code observation, or explicit human reference evidence.
+- `UNVERIFIED`: existence/name is suggested but the actual artifact has not been confirmed.
+- `INFERENCE`: AI inference; never present it as an existing approved artifact.
+- `NEWLY_CREATED`: created during the current work; keep the creation reason and do not present it as a recovered past artifact.
+
+For a past-artifact request, run `artifact-recall` before presenting an item as existing. Missing or unverified items return `REPORT_MISSING`. Reproduction is allowed only with an explicit reason and must be disclosed as a new reconstruction; the helper returns the required `NEWLY_CREATED` classification and disclosure text. An approved reference that is missing or no longer available is a STOP for substitution: find the real reference or obtain a human value decision instead of silently replacing it.
+
+Use `decision-gate` before finalizing a human-value choice. Technical comparison/verification remains AI-owned; an unresolved human-value decision returns `HUMAN_VALUE_DECISION_REQUIRED`. Use `focus-gate` at meaningful checkpoints when the current task risks drifting from the stored Current Goal.
+
+This is mechanically `ENFORCED` only where an agent has local repository access and actually invokes the helper. Browser-only environments without that execution hook remain `OPERATIONAL`; do not claim universal browser enforcement.
+
 ## Required Machine Gate Before Generation
 
 Create machine-readable state containing:
