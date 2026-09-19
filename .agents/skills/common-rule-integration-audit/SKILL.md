@@ -42,6 +42,20 @@ description: Use before adding or changing common rules, common skills, common l
 
 名称一致だけでなく、目的・trigger・stop condition・責務が類似する既存ルールも確認する。
 
+### 2.5 Whole-rule health check
+
+Before changing common source-of-truth files, run the existing read-only inventory helper:
+
+```text
+node .agents/skills/common-rule-integration-audit/common-rule-health-audit.mjs --root . --pretty
+```
+
+It checks the currently declared common mechanisms for documented implementation/test evidence **and declared activation evidence**. Each contract reports its activation mode and enforcement scope, and missing trigger/execution markers are classified as `DECLARATION_ONLY` instead of being upgraded from file existence alone. `LOCAL_WHEN_INVOKED` evidence never implies universal browser auto-trigger. It also inventories Markdown volume, long files, duplicate long paragraphs, unindexed learnings, unlisted skills, and explicit deprecation markers. Findings are evidence for this audit, not permission to auto-delete, auto-merge, or rewrite source-of-truth files.
+
+The same health check is invoked by the Foundation portfolio-governance audit, so repository-coverage review also exposes rule-effectiveness debt without a recurring hosted job. A `COMMON_RULE_HEALTH_STOP` must be resolved before claiming the common mechanisms are fully healthy.
+
+For an important improvement to be reported as implemented, record evidence for the source-of-truth change, trigger, execution route, test, fail condition, and at least one representative regression case. A Markdown statement alone remains `DECLARATION_ONLY` or `OPERATIONAL` according to the actual trigger/mechanism; never upgrade it to `ENFORCED` from wording alone.
+
 ### 3. Classification
 
 必ず次のどれかに分類する。

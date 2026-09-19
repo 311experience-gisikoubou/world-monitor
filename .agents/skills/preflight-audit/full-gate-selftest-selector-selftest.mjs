@@ -51,6 +51,15 @@ const operationWithSharedDoc = select([
 ]);
 assert(operationWithSharedDoc.selection === 'FULL_SUITE', 'preflight shared instruction file must use full suite');
 assert(operationWithSharedDoc.reasons.includes('HIGH_COUPLING_PATH_REQUIRES_FULL_SUITE'), 'preflight shared instruction reason missing');
+const projectMemory = select(['.agents/skills/handoff/project-working-memory.mjs']);
+assert(projectMemory.selection === 'IMPACT_SCOPED', 'project working memory code should be impact scoped');
+for (const id of ['project-context','project-memory']) assert(projectMemory.selectedTests.includes(id), `project memory selection missing ${id}`);
+const ruleHealth = select(['.agents/skills/common-rule-integration-audit/common-rule-health-audit.mjs']);
+assert(ruleHealth.selection === 'IMPACT_SCOPED', 'common rule health code should be impact scoped');
+assert(ruleHealth.selectedTests.includes('common-rule-health'), 'common rule health selftest missing');
+const portfolioGovernance = select(['tools/portfolio-governance-audit.mjs']);
+assert(portfolioGovernance.selection === 'IMPACT_SCOPED', 'portfolio governance code should be impact scoped');
+for (const id of ['portfolio-governance','common-rule-health']) assert(portfolioGovernance.selectedTests.includes(id), `portfolio governance selection missing ${id}`);
 const liveBase = select(['.agents/skills/preflight-audit/live-base-ref-guard.mjs']);
 assert(liveBase.selection === 'IMPACT_SCOPED', 'live-base guard change should be impact scoped');
 assert(liveBase.selectedTests.includes('live-base-ref'), 'live-base guard selftest missing');
@@ -117,7 +126,7 @@ assert(unknown.selection === 'FULL_SUITE', 'unknown governance path must use ful
 assert(unknown.reasons.includes('UNMAPPED_CHANGED_PATH_REQUIRES_FULL_SUITE'), 'unknown path reason missing');
 const highCoupling = select(['.agents/skills/preflight-audit/fast-path-classifier.mjs']);
 assert(highCoupling.selection === 'FULL_SUITE', 'fast-path classifier change must use full suite');
-assert(highCoupling.selectedTests.length === 29 && highCoupling.commands.length === 29, 'full suite must include all 29 selftests');
+assert(highCoupling.selectedTests.length === 32 && highCoupling.commands.length === 32, 'full suite must include all 32 selftests');
 assert(highCoupling.reasons.includes('HIGH_COUPLING_PATH_REQUIRES_FULL_SUITE'), 'high coupling reason missing');
 
 const docsOnly = select(['CHANGELOG.md','VERSION']);

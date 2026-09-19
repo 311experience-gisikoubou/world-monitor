@@ -1,0 +1,88 @@
+#!/usr/bin/env node
+import { access, readFile, readdir } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
+import process from 'node:process';
+import { pathToFileURL } from 'node:url';
+
+const CONTRACTS = Object.freeze([
+  {id:'human-ai-responsibility',required:'OPERATIONAL',docs:['CORE.md','OPERATIONS.md'],impl:[],tests:[],activationMode:'OPERATIONAL_AGENT_READ',enforcementScope:'OPERATIONAL',activationEvidence:[{path:'AGENTS.md',contains:'CORE.md'}]},
+  {id:'project-context',required:'TECHNICAL',docs:['.agents/skills/handoff/SKILL.md'],impl:['.agents/skills/handoff/project-context-guard.mjs'],tests:['.agents/skills/handoff/project-context-guard-selftest.mjs'],activationMode:'OPERATIONAL_AGENT_CALL',enforcementScope:'LOCAL_WHEN_INVOKED',activationEvidence:[{path:'.agents/skills/handoff/SKILL.md',contains:'--turn-start'}]},
+  {id:'project-working-memory',required:'TECHNICAL',docs:['.agents/skills/handoff/SKILL.md'],impl:['.agents/skills/handoff/project-working-memory.mjs'],tests:['.agents/skills/handoff/project-working-memory-selftest.mjs'],activationMode:'OPERATIONAL_AGENT_CALL',enforcementScope:'LOCAL_WHEN_INVOKED',activationEvidence:[{path:'.agents/skills/handoff/SKILL.md',contains:'project-working-memory.mjs'},{path:'.agents/skills/handoff/SKILL.md',contains:'artifact-recall'}]},
+  {id:'anti-loop-stagnation',required:'TECHNICAL',docs:['learnings/L-0004.md','OPERATIONS.md'],impl:['.agents/skills/preflight-audit/stagnation-watch.mjs'],tests:['.agents/skills/preflight-audit/stagnation-watch-selftest.mjs'],activationMode:'OPERATIONAL_AGENT_CALL',enforcementScope:'LOCAL_WHEN_INVOKED',activationEvidence:[{path:'AGENTS.md',contains:'stagnation-watch.mjs --response-intent terminate'},{path:'learnings/L-0004.md',contains:'--interaction-signal'}]},
+  {id:'long-task-wait',required:'TECHNICAL',docs:['.agents/skills/long-task-wait/SKILL.md'],impl:['.agents/skills/long-task-wait/bounded-task-wait.mjs','.agents/skills/long-task-wait/turn-wait-budget.mjs'],tests:['.agents/skills/long-task-wait/long-task-wait-selftest.mjs'],activationMode:'OPERATIONAL_AGENT_CALL',enforcementScope:'LOCAL_WHEN_INVOKED',activationEvidence:[{path:'.agents/skills/long-task-wait/SKILL.md',contains:'bounded-task-wait.mjs'}]},
+  {id:'common-rule-integration',required:'OPERATIONAL',docs:['.agents/skills/common-rule-integration-audit/SKILL.md','OPERATIONS.md','learnings/L-0003.md'],impl:['.agents/skills/common-rule-integration-audit/common-rule-health-audit.mjs'],tests:['.agents/skills/common-rule-integration-audit/common-rule-health-audit-selftest.mjs'],activationMode:'MACHINE_NESTED_IN_PORTFOLIO_AUDIT',enforcementScope:'PORTFOLIO_AUDIT_CALL',activationEvidence:[{path:'tools/portfolio-governance-audit.mjs',contains:'collectRuleHealth'},{path:'.agents/skills/common-rule-integration-audit/SKILL.md',contains:'common-rule-health-audit.mjs'}]},
+]);
+
+async function exists(p){try{await access(p);return true;}catch{return false;}}
+function fail(code,detail={}){return {ok:false,code,...detail};}
+async function ruleMarkdown(root){
+  const files=[];
+  for(const f of ['AGENTS.md','CORE.md','OPERATIONS.md','PROJECT_COMPLETION.md','.agents/skills/README.md']) if(await exists(join(root,f))) files.push(f);
+  for(const d of ['learnings','roles']){
+    const p=join(root,d); if(!await exists(p)) continue;
+    for(const e of await readdir(p,{withFileTypes:true})) if(e.isFile()&&e.name.endsWith('.md')) files.push(d+'/'+e.name);
+  }
+  const s=join(root,'.agents','skills');
+  if(await exists(s)) for(const e of await readdir(s,{withFileTypes:true})) if(e.isDirectory()&&await exists(join(s,e.name,'SKILL.md'))) files.push('.agents/skills/'+e.name+'/SKILL.md');
+  return [...new Set(files)].sort();
+}
+function paras(text){
+  const chunks=String(text).replaceAll('\r\n','\n').split(/\n\s*\n/u);
+  return chunks.map(x=>x.replace(/\s+/gu,' ').trim()).filter(x=>x.length>=120&&!x.startsWith('#')&&!x.startsWith('```'));
+}
+export async function auditRuleHealth({root,contracts=CONTRACTS}={}){
+  const base=resolve(root??process.cwd());
+  const rows=[];
+  for(const c of contracts){
+    const docsMissing=[],implementationMissing=[],testsMissing=[],activationMissing=[];
+    for(const p of c.docs??[]) if(!await exists(join(base,p))) docsMissing.push(p);
+    for(const p of c.impl??[]) if(!await exists(join(base,p))) implementationMissing.push(p);
+    for(const p of c.tests??[]) if(!await exists(join(base,p))) testsMissing.push(p);
+    for(const evidence of c.activationEvidence??[]){
+      const path=join(base,evidence.path);
+      if(!await exists(path)){activationMissing.push({...evidence,reason:'FILE_MISSING'});continue;}
+      const text=await readFile(path,'utf8');
+      if(!text.includes(evidence.contains)) activationMissing.push({...evidence,reason:'MARKER_MISSING'});
+    }
+    let state='OPERATIONAL';
+    if(docsMissing.length) state='MISSING';
+    else if(c.required==='TECHNICAL') state=(implementationMissing.length||testsMissing.length||activationMissing.length)?'DECLARATION_ONLY':'ENFORCED';
+    else if(activationMissing.length) state='DECLARATION_ONLY';
+    rows.push({
+      id:c.id,
+      required:c.required,
+      state,
+      activationMode:c.activationMode??'UNSPECIFIED',
+      enforcementScope:c.enforcementScope??'UNSPECIFIED',
+      docsMissing,
+      implementationMissing,
+      testsMissing,
+      activationMissing,
+    });
+  }
+  const files=await ruleMarkdown(base), stats=[], map=new Map(), deprecated=[];
+  for(const f of files){
+    const t=await readFile(join(base,f),'utf8'), lines=t.replaceAll('\r\n','\n').split('\n').length;
+    stats.push({file:f,lineCount:lines,long:lines>500});
+    for(const p of paras(t)){const k=p.toLowerCase();const a=map.get(k)??[];a.push(f);map.set(k,a);}
+    if(/(?:^|\n)\s*(?:Status\s*:\s*(?:deprecated|obsolete)|#+\s*(?:Deprecated|Obsolete|廃止候補|非推奨)\b)/iu.test(t)) deprecated.push(f);
+  }
+  const duplicates=[];
+  for(const [p,where] of map){const u=[...new Set(where)];if(u.length>1)duplicates.push({files:u,preview:p.slice(0,180)});}
+  const indexPath=join(base,'learnings','INDEX.md'),index=await exists(indexPath)?await readFile(indexPath,'utf8'):'';
+  const unindexed=[];
+  const ld=join(base,'learnings');
+  if(await exists(ld)) for(const e of await readdir(ld,{withFileTypes:true})) if(e.isFile()&&/^L-\d+\.md$/u.test(e.name)&&!index.includes(e.name.replace(/\.md$/u,''))) unindexed.push('learnings/'+e.name);
+  const readmePath=join(base,'.agents','skills','README.md'),readme=await exists(readmePath)?await readFile(readmePath,'utf8'):'';
+  const unlisted=[];
+  const sd=join(base,'.agents','skills');
+  if(await exists(sd)) for(const e of await readdir(sd,{withFileTypes:true})) if(e.isDirectory()&&await exists(join(sd,e.name,'SKILL.md'))&&!readme.includes(e.name)) unlisted.push(e.name);
+  const declarationOnly=rows.filter(x=>x.state==='DECLARATION_ONLY'),missing=rows.filter(x=>x.state==='MISSING'),longFiles=stats.filter(x=>x.long);
+  const activationFailures=rows.filter(x=>x.activationMissing.length>0);
+  const ok=declarationOnly.length===0&&missing.length===0&&unindexed.length===0;
+  return {ok,code:ok?'COMMON_RULE_HEALTH_PASS':'COMMON_RULE_HEALTH_STOP',schemaVersion:1,totals:{contracts:rows.length,enforced:rows.filter(x=>x.state==='ENFORCED').length,operational:rows.filter(x=>x.state==='OPERATIONAL').length,declarationOnly:declarationOnly.length,missing:missing.length,activationFailures:activationFailures.length,markdownFiles:files.length,markdownLines:stats.reduce((n,x)=>n+x.lineCount,0),longFiles:longFiles.length,duplicateParagraphs:duplicates.length,unindexedLearnings:unindexed.length,unlistedSkills:unlisted.length},reviewRecommended:Boolean(declarationOnly.length||missing.length||longFiles.length||duplicates.length||unindexed.length||unlisted.length),contracts:rows,inventory:{longFiles,duplicateParagraphs:duplicates,unindexedLearnings:unindexed,unlistedSkills:unlisted,deprecatedCandidates:[...new Set(deprecated)].sort()},rule:'ENFORCED means implementation, test, and declared activation evidence were found inside the stated enforcementScope; it never implies universal browser auto-trigger. No automatic rule deletion or merge.'};
+}
+function args(argv){let root=process.cwd(),pretty=false;for(let i=0;i<argv.length;i++){if(argv[i]==='--root'&&argv[i+1])root=argv[++i];else if(argv[i]==='--pretty')pretty=true;else return fail('ARGUMENT_INVALID');}return {ok:true,root:resolve(root),pretty};}
+async function main(){const a=args(process.argv.slice(2));if(!a.ok){console.log(JSON.stringify(a));process.exitCode=2;return;}try{const o=await auditRuleHealth({root:a.root});console.log(JSON.stringify(o,null,a.pretty?2:0));console.error('COMMON_RULE_HEALTH='+(o.ok?'PASS':'STOP')+' declarationOnly='+o.totals.declarationOnly+' markdownLines='+o.totals.markdownLines);if(!o.ok)process.exitCode=2;}catch(e){console.log(JSON.stringify(fail(e?.message||'COMMON_RULE_HEALTH_INTERNAL_ERROR')));process.exitCode=2;}}
+export { CONTRACTS };
+if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href) await main();

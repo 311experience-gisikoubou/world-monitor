@@ -6,7 +6,7 @@ import { parseInput, validateEvidence } from './fast-path-classifier.mjs';
 const CORE = ['merge-authorization','merge-execution','fast-path','security-preflight','full-gate-selector'];
 const ALL = [
   'merge-authorization','merge-execution','merge-execution-batch','merge-executor','foundation-sync','foundation-bootstrap','foundation-update','foundation-remote-plan','foundation-batch-rollout',
-  'project-context','live-base-ref','ai-capacity','ai-provider-inventory','ai-task-router','claude-runner','fast-path','operation-preflight','actions-cost',
+  'project-context','project-memory','common-rule-health','portfolio-governance','live-base-ref','ai-capacity','ai-provider-inventory','ai-task-router','claude-runner','fast-path','operation-preflight','actions-cost',
   'provider-qualification','provider-readiness','security-history','security-preflight','stagnation','wip-observer','portfolio-health','long-task-wait','merge-readiness','real-device',
   'full-gate-selector',
 ];
@@ -21,6 +21,9 @@ const COMMANDS = {
   'foundation-remote-plan':['node','.agents/skills/foundation-sync-audit/foundation-remote-update-plan-selftest.mjs','.agents/skills/foundation-sync-audit/foundation-remote-update-plan.mjs'],
   'foundation-batch-rollout':['node','.agents/skills/foundation-sync-audit/foundation-batch-rollout-plan-selftest.mjs'],
   'project-context':['node','.agents/skills/handoff/project-context-guard-selftest.mjs','.agents/skills/handoff/project-context-guard.mjs'],
+  'project-memory':['node','.agents/skills/handoff/project-working-memory-selftest.mjs','.agents/skills/handoff/project-working-memory.mjs'],
+  'common-rule-health':['node','.agents/skills/common-rule-integration-audit/common-rule-health-audit-selftest.mjs','.agents/skills/common-rule-integration-audit/common-rule-health-audit.mjs'],
+  'portfolio-governance':['node','tools/portfolio-governance-audit-selftest.mjs'],
   'live-base-ref':['node','.agents/skills/preflight-audit/live-base-ref-guard-selftest.mjs','.agents/skills/preflight-audit/live-base-ref-guard.mjs'],
   'ai-capacity':['node','.agents/skills/preflight-audit/ai-capacity-observer-selftest.mjs','.agents/skills/preflight-audit/ai-capacity-observer.mjs'],
   'ai-provider-inventory':['node','.agents/skills/preflight-audit/ai-provider-inventory-selftest.mjs','.agents/skills/preflight-audit/ai-provider-inventory.mjs','.agents/skills/preflight-audit/ai-task-router.mjs'],
@@ -46,7 +49,9 @@ const GROUPS = {
   'actions-cost':['actions-cost'],
   'claude-runner':['claude-runner'],
   'stagnation':['stagnation'],
-  'project-context':['project-context'],
+  'project-context':['project-context','project-memory'],
+  'common-rule-health':['common-rule-health'],
+  'portfolio-governance':['portfolio-governance','common-rule-health'],
   'live-base-ref':['live-base-ref'],
   'security-history':['security-history'],
   'security-preflight':['security-preflight'],
@@ -81,7 +86,9 @@ function familyFor(path) {
   if (pair(path,pre,'github-actions-cost-guard')) return 'actions-cost';
   if (pair(path,pre,'claude-subscription-runner')) return 'claude-runner';
   if (pair(path,pre,'stagnation-watch')) return 'stagnation';
-  if (pair(path,'.agents/skills/handoff','project-context-guard')) return 'project-context';
+  if (pair(path,'.agents/skills/handoff','project-context-guard') || pair(path,'.agents/skills/handoff','project-working-memory')) return 'project-context';
+  if (pair(path,'.agents/skills/common-rule-integration-audit','common-rule-health-audit')) return 'common-rule-health';
+  if (path === 'tools/portfolio-governance-audit.mjs' || path === 'tools/portfolio-governance-audit-selftest.mjs') return 'portfolio-governance';
   if (pair(path,pre,'live-base-ref-guard')) return 'live-base-ref';
   if (pair(path,pre,'security-history-audit')) return 'security-history';
   if (pair(path,pre,'security-preflight')) return 'security-preflight';
