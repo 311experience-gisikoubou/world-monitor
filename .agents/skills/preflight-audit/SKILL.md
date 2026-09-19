@@ -18,6 +18,17 @@ description: Use before implementation, fixes, refactoring, UI/backend/design ch
 - Multi-step or long-running AI work must keep a non-engineer user oriented on current stage, meaning, next step, and whether user action is needed; do not make the user infer progress from technical logs.
 - Important rules must be classified as `DECLARATION_ONLY`, `OPERATIONAL`, or `TECHNICAL_ENFORCEMENT_REQUIRED`. Do not claim enforcement that does not exist.
 
+## Approved Baseline Preservation
+
+Before implementation, migration, redesign, tool-to-tool transfer, UI recreation, specification rewrite, or any other work derived from a human-approved baseline:
+
+- Identify whether the user has already designated any artifact, image, layout, specification, naming set, data structure, workflow, or design direction as the baseline / source of truth / approved version.
+- Treat that approved baseline as immutable in substance unless the human explicitly authorizes a change. Do not reinterpret current code, a different document, or an AI improvement idea as permission to change the approved baseline.
+- When transferring or reproducing the baseline in another tool or implementation, preserve layout, ordering, sizing, naming, hierarchy, and workflow semantics to the extent represented by the baseline. Separate implementation necessities from design changes.
+- If a meaningful difference is technically required, stop that difference before write, describe the exact delta and reason, and obtain human approval. Continue all unaffected safe work.
+- Improvements may be proposed only as separate alternatives. They must not silently replace, merge into, or become the approved baseline.
+- Record this check as `APPROVED_BASELINE=NONE|PRESERVED|CHANGE_REQUIRES_HUMAN`. This is an `OPERATIONAL` gate. Do not call it mechanically enforced when the baseline itself is not machine-addressable.
+
 ## Existing Solution / OSS Reuse Check
 
 Before substantial custom implementation or adoption of a new dependency/service, determine whether the goal can be met more safely and simply by existing approved mechanisms or maintained reusable software.

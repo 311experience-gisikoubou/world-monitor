@@ -27,6 +27,7 @@ Before checking merge readiness, identify where the audited change was actually 
 - Migration diffs, if any (see `migration-safety`)
 - Dependency-manifest and lockfile diffs, if the repository has any (the specific file names are repository-specific — see `AGENTS.local.md`)
 - Consistency with the repository's design documentation (its "Source of Truth")
+- Consistency with any human-approved baseline / reference design / approved specification: verify that no meaningful layout, ordering, sizing, naming, hierarchy, workflow, or structural change was introduced without explicit human approval. AI-proposed improvements do not count as approval.
 - Consistency with the implementation report already given to the user
 - Diff hygiene: use `git diff --check` when the audited head exists in the local execution workspace; for remote-only work, inspect the canonical PR/compare diff with an equivalent whitespace/conflict-marker check and record that it is an equivalent remote diff-hygiene check rather than claiming the literal local command ran
 - The repository's required format, lint, type-check, build, selftest, and other verification **only for properties not already covered by a valid `VERIFICATION_EVIDENCE_V1` receipt for the exact current base/head/scope**
@@ -280,6 +281,7 @@ Report:
 - Git state relevant to those source(s)
 - Diff scope
 - Specification fit
+- Approved baseline preservation: `NONE` / `PRESERVED` / `AUTHORIZED_CHANGE` / `BLOCKER`
 - Verification results, distinguishing literal commands from equivalent remote checks
 - Security review result
 - PR description consistency result
