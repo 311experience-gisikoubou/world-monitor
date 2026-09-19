@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "projectContextId": "world-monitor-v1",
+  "projectName": "World Monitor",
+  "projectRootRepository": "311experience-gisikoubou/world-monitor",
+  "finalObjective": "Provide a dashboard for monitoring world information in one place.",
+  "thisRepository": "311experience-gisikoubou/world-monitor",
+  "repositoryRole": "ROOT"
+}
