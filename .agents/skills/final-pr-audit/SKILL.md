@@ -233,11 +233,27 @@ Without `--execute`, the executor is read-only and returns only a plan. With `--
 The executor performs a read-only preflight for all targets before any mutation, marks only exact authorized Draft targets Ready, reuses the batch merge-execution gate, squash-merges with the exact audited HEAD precondition, and immediately verifies merged PR state, live `main`, merged tree equality, and single-parent equality to the audited base. On pre-merge failure it restores only PRs it changed from Draft to Ready. On partial merge/interruption it never replays a target already proven merged; remaining targets are restored to Draft when safe and may resume from durable GitHub state.
 
 A previously merged target counts as resumable only when the exact audited HEAD still matches the PR, the merge commit tree matches the audited tree, the first/only parent equals the audited base, live `main` still points at that merge commit, and an exact authorization receipt existed **before** `merged_at`. Later approval is never retroactive authorization.
+### Contract Conformance Gate
+
+Functional verification and Contract Conformance are independent. Before `PREPARED_FOR_MERGE=yes`, rerun `.agents/skills/handoff/canonical-contract-gate.mjs` against the exact current HEAD contract and the audited implementation target/spec-use state.
+
+Record:
+
+```text
+CONTRACT=<contract-id>@<contract-version>
+CONTRACT_GATE=PASS
+CANONICAL_TARGET=<slot>=<artifact-id>
+SUPERSEDED_SPEC_USED=NO
+```
+
+A Functional Gate PASS never overrides Contract Gate FAIL. Missing/ambiguous CURRENT authority, use of a SUPERSEDED/HISTORICAL/DRAFT spec, a cross-project contract, or an implementation target different from the CURRENT artifact is a merge blocker. Normal Contract PASS adds no human confirmation.
+
 ### `PREPARED_FOR_MERGE` criteria
 
 Report `PREPARED_FOR_MERGE=yes` only when all applicable conditions are proven:
 
 - final audit result is PASS;
+- Canonical Contract Gate is PASS for the exact audited implementation target, `SUPERSEDED_SPEC_USED=NO`, and the recorded contract ID/version still match the current HEAD;
 - required `test-gate` and real-device/manual checks are PASS or explicitly unneeded;
 - PR description is consistent with verified facts;
 - PR state matches the active protection mode: **Draft when Draft Lock Mode is required**, or the repository's verified stronger server-side protection policy otherwise;
@@ -281,6 +297,7 @@ Report:
 - Git state relevant to those source(s)
 - Diff scope
 - Specification fit
+- `CONTRACT=<id>@<version>`, `CONTRACT_GATE=PASS|FAIL`, canonical target(s), and `SUPERSEDED_SPEC_USED=YES|NO`
 - Approved baseline preservation: `NONE` / `PRESERVED` / `AUTHORIZED_CHANGE` / `BLOCKER`
 - Verification results, distinguishing literal commands from equivalent remote checks
 - Security review result

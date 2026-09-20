@@ -211,6 +211,16 @@ Before creating a new feature branch, Issue, PR, or product implementation, conf
 - A non-read-only operation stops when the independently observed repository/project identity differs from the expected project, or when its target Issue/PR repository differs from the expected repository. A direct `read-only-reference` check may name another repository, but the Fast/Full **change classifier rejects read-only reference as change authority**, so it cannot authorize implementation, REAL_DEVICE, or a write.
 - The actual Project Context is read from the committed Git `HEAD:PROJECT_CONTEXT.json`; working-tree identity drift is a STOP. The observation also binds the current branch and HEAD and is freshness-limited. WIP freshness remains the existing `wipReview` gate; merge-time PR/base/HEAD/live-main freshness remains the existing final-PR/merge execution gates rather than being duplicated here.
 
+## Canonical Contract Gate
+
+Before choosing implementation scope, treat the committed `PROJECT_CONTEXT.json.canonicalContract` as the machine authority for which current business/design/security/workflow/governance artifact is allowed to drive the change. Build a closed contract work state for the slots affected by the intended change and run:
+
+```text
+node .agents/skills/handoff/canonical-contract-gate.mjs --context-file PROJECT_CONTEXT.json --state-json <contract-work-state-json> --pretty
+```
+
+Proceed only on `contractGate=PASS`. An old file may be inspected as history, but a SUPERSEDED/HISTORICAL/DRAFT artifact must not appear in `usedSpecIds`. If the selected implementation target differs from the CURRENT artifact for that slot, stop before implementation and correct the scope. This is an upstream scope check, not another build/test pass, and it must not create a new human confirmation on the normal PASS path.
+
 ## Machine Gate
 
 When Node.js and Git are available in the local execution workspace being used for the change, run the dependency-free security gate before semantic checks.
