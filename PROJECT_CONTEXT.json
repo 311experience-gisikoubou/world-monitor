@@ -1,50 +1,57 @@
 {
-    "schemaVersion":  1,
-    "projectContextId":  "world-monitor-v1",
-    "projectName":  "World Monitor",
-    "projectRootRepository":  "311experience-gisikoubou/world-monitor",
-    "finalObjective":  "Provide a dashboard for monitoring world information in one place.",
-    "thisRepository":  "311experience-gisikoubou/world-monitor",
-    "repositoryRole":  "ROOT",
-    "canonicalContract":  {
-                              "schemaVersion":  1,
-                              "contractId":  "world-monitor-contract",
-                              "contractVersion":  "1",
-                              "approved":  true,
-                              "artifacts":  [
-                                                {
-                                                    "id":  "world-monitor-project-v1",
-                                                    "kind":  "PROJECT",
-                                                    "slot":  "project-baseline",
-                                                    "status":  "CURRENT",
-                                                    "sources":  [
-                                                                    "PROJECT_CONTEXT.json"
-                                                                ]
-                                                },
-                                                {
-                                                    "id":  "world-monitor-workflow-v1",
-                                                    "kind":  "WORKFLOW",
-                                                    "slot":  "workflow-rules",
-                                                    "status":  "CURRENT",
-                                                    "sources":  [
-                                                                    "AGENTS.md"
-                                                                ]
-                                                },
-                                                {
-                                                    "id":  "world-monitor-security-v1",
-                                                    "kind":  "SECURITY",
-                                                    "slot":  "security-rules",
-                                                    "status":  "CURRENT",
-                                                    "sources":  [
-                                                                    "AGENTS.local.md"
-                                                                ]
-                                                }
-                                            ],
-                              "protectedDecisions":  [
-
-                                                     ],
-                              "requiredValidation":  [
-                                                         "canonical-contract-gate"
-                                                     ]
-                          }
+  "schemaVersion": 1,
+  "projectContextId": "world-monitor-v1",
+  "projectName": "World Monitor",
+  "projectRootRepository": "311experience-gisikoubou/world-monitor",
+  "finalObjective": "Provide a dashboard for monitoring world information in one place.",
+  "thisRepository": "311experience-gisikoubou/world-monitor",
+  "repositoryRole": "ROOT",
+  "canonicalContract": {
+    "schemaVersion": 1,
+    "contractId": "world-monitor-contract",
+    "contractVersion": "2",
+    "approved": true,
+    "artifacts": [
+      {
+        "id": "world-monitor-project-v1",
+        "kind": "PROJECT",
+        "slot": "project-baseline",
+        "status": "CURRENT",
+        "sources": [
+          "PROJECT_CONTEXT.json"
+        ]
+      },
+      {
+        "id": "world-monitor-workflow-v1",
+        "kind": "WORKFLOW",
+        "slot": "workflow-rules",
+        "status": "CURRENT",
+        "sources": [
+          "AGENTS.md"
+        ]
+      },
+      {
+        "id": "world-monitor-security-v1",
+        "kind": "SECURITY",
+        "slot": "security-rules",
+        "status": "CURRENT",
+        "sources": [
+          "AGENTS.local.md"
+        ]
+      }
+    ],
+    "protectedDecisions": [
+      "human-decision-source-of-truth"
+    ],
+    "requiredValidation": [
+      "canonical-contract-gate",
+      "human-decision-sync"
+    ]
+  },
+  "humanDecisionSync": {
+    "schemaVersion": 1,
+    "decisions": [],
+    "currentState": "Human Decision Sync is enabled. No project-specific mutable human decisions were backfilled automatically; the current canonicalContract remains implementation authority.",
+    "nextAction": "Record future explicit human-confirmed mutable decisions here before implementation whenever they change project authority."
+  }
 }

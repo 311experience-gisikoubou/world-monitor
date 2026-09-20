@@ -7,6 +7,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { validateCanonicalContract, verifyCanonicalSources } from './canonical-contract-gate.mjs';
+import { validateHumanDecisionSync } from './human-decision-sync.mjs';
 
 const EXPECTED_SECTION_ORDER = ['projectRoot', 'currentState', 'relatedWork', 'nextAction'];
 const REQUIRED_HEADINGS = ['## Project Root', '## Current State', '## Related Work', '## Next Action'];
@@ -236,6 +237,8 @@ export function observeProjectContextEvidence(contextFile) {
   if (workingNormalized.error) return workingNormalized.error;
   const workingContract = validateCanonicalContract(workingManifest);
   if (workingContract.result === 'STOP') return workingContract;
+  const workingDecisions = validateHumanDecisionSync(workingManifest);
+  if (workingDecisions.result === 'STOP') return workingDecisions;
   const repositoryEvidence = actualRepoForContextFile(resolvedContextFile);
   if (repositoryEvidence.error) return repositoryEvidence.error;
   const committedResult = spawnSync('git', ['-C', contextDir, 'show', headSha + ':PROJECT_CONTEXT.json'], { windowsHide:true, timeout:5000, env:gitEnv });
@@ -248,10 +251,13 @@ export function observeProjectContextEvidence(contextFile) {
   if (committedNormalized.error) return stop('PROJECT_CONTEXT_COMMITTED_EVIDENCE_INVALID', 'Committed PROJECT_CONTEXT.json is invalid.');
   const committedContract = validateCanonicalContract(committedManifest);
   if (committedContract.result === 'STOP') return stop('CANONICAL_CONTRACT_COMMITTED_EVIDENCE_INVALID', 'Committed PROJECT_CONTEXT.json canonicalContract is invalid.', { contractCode: committedContract.code });
+  const committedDecisions = validateHumanDecisionSync(committedManifest);
+  if (committedDecisions.result === 'STOP') return stop('HUMAN_DECISION_SYNC_COMMITTED_EVIDENCE_INVALID', 'Committed PROJECT_CONTEXT.json humanDecisionSync is invalid.', { decisionCode: committedDecisions.code });
   const working = workingNormalized.value;
   const m = committedNormalized.value;
   if (JSON.stringify(working) !== JSON.stringify(m)) return stop('PROJECT_CONTEXT_WORKTREE_DRIFT', 'Working PROJECT_CONTEXT.json differs from the committed project identity.');
   if (workingContract.contractFingerprint !== committedContract.contractFingerprint) return stop('CANONICAL_CONTRACT_WORKTREE_DRIFT', 'Working canonicalContract differs from the contract committed at the captured Git HEAD.', { committedContractId: committedContract.contractId, committedContractVersion: committedContract.contractVersion });
+  if (workingDecisions.humanDecisionFingerprint !== committedDecisions.humanDecisionFingerprint) return stop('HUMAN_DECISION_SYNC_WORKTREE_DRIFT', 'Working humanDecisionSync differs from the decision state committed at the captured Git HEAD.');
   const contractSources = verifyCanonicalSources(resolvedContextFile, committedManifest);
   if (contractSources.result === 'STOP') return contractSources;
   if (repositoryEvidence.repository !== m.thisRepo) return stop('PROJECT_CONTEXT_REPOSITORY_DRIFT', 'Committed PROJECT_CONTEXT.json thisRepository does not match the actual origin repository.');
@@ -260,7 +266,7 @@ export function observeProjectContextEvidence(contextFile) {
   if (endBranch !== currentBranch || endHead !== headSha) return stop('PROJECT_CONTEXT_CHANGED_DURING_OBSERVATION', 'Branch or HEAD changed while Project Guard was collecting evidence.');
   return {
     result:'PROCEED', projectContextId:m.projectContextId, projectRootRepository:m.rootRepo, thisRepository:m.thisRepo,
-    contextFingerprint:fingerprint(m), canonicalContract:{ contractId:committedContract.contractId, contractVersion:committedContract.contractVersion, contractFingerprint:committedContract.contractFingerprint, canonicalTargets:committedContract.canonicalTargets }, actualRepository:repositoryEvidence.repository, worktreeRepository:repositoryEvidence.repository,
+    contextFingerprint:fingerprint(m), canonicalContract:{ contractId:committedContract.contractId, contractVersion:committedContract.contractVersion, contractFingerprint:committedContract.contractFingerprint, canonicalTargets:committedContract.canonicalTargets }, humanDecisionSync:{ configured:committedDecisions.configured, required:committedDecisions.required, humanDecisionFingerprint:committedDecisions.humanDecisionFingerprint, activeDecisions:committedDecisions.activeDecisions, deprecatedDecisions:committedDecisions.deprecatedDecisions, unresolvedItems:committedDecisions.unresolvedItems, proposedDecisions:committedDecisions.proposedDecisions, currentState:committedDecisions.currentState, nextAction:committedDecisions.nextAction }, actualRepository:repositoryEvidence.repository, worktreeRepository:repositoryEvidence.repository,
     currentBranch, headSha, observedAt:new Date().toISOString(),
   };
 }
@@ -315,6 +321,8 @@ export function validateTurnContinuation(manifestInput, stateInput) {
   if (normalized.error) return normalized.error;
   const contract = validateCanonicalContract(manifestInput);
   if (contract.result === 'STOP') return contract;
+  const decisions = validateHumanDecisionSync(manifestInput);
+  if (decisions.result === 'STOP') return decisions;
   const m = normalized.value;
   if (m.repositoryRole !== 'ROOT') return stop('PROJECT_CONTEXT_CANONICAL_ROOT_REQUIRED', 'Turn-start continuation must use the canonical PROJECT_CONTEXT.json from the active Project Root repository.');
 
@@ -354,6 +362,7 @@ export function validateTurnContinuation(manifestInput, stateInput) {
     projectRootRepository: m.rootRepo,
     contextFingerprint: canonicalFingerprint,
     canonicalContract: { contractId: contract.contractId, contractVersion: contract.contractVersion, contractFingerprint: contract.contractFingerprint, canonicalTargets: contract.canonicalTargets },
+    humanDecisionSync: { configured:decisions.configured, required:decisions.required, humanDecisionFingerprint:decisions.humanDecisionFingerprint, activeDecisions:decisions.activeDecisions, deprecatedDecisions:decisions.deprecatedDecisions, unresolvedItems:decisions.unresolvedItems, proposedDecisions:decisions.proposedDecisions, currentState:decisions.currentState, nextAction:decisions.nextAction },
     nextAction: 'CONTINUE_WITHIN_ACTIVE_PROJECT',
   };
 }
