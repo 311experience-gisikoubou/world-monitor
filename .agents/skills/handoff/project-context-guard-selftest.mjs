@@ -14,6 +14,9 @@ const { validateProjectContext, validateTurnContinuation, renderHandoffSkeleton,
 
 function assert(condition, message) { if (!condition) throw new Error(`FAIL: ${message}`); }
 function complete(markdown) { return markdown; }
+function canonicalContract(id) {
+  return { schemaVersion:1, contractId:id + '-contract', contractVersion:'1', approved:true, artifacts:[{ id:id + '-baseline', kind:'GOVERNANCE', slot:'project-baseline', status:'CURRENT', sources:['PROJECT_CONTEXT.json'] }], protectedDecisions:[], requiredValidation:['canonical-contract-gate'] };
+}
 function manifest(overrides = {}) {
   return {
     schemaVersion: 1,
@@ -23,6 +26,7 @@ function manifest(overrides = {}) {
     finalObjective: 'Safely manage delivery and billing workflow.',
     thisRepository: '311experience-gisikoubou/dental-delivery-billing',
     repositoryRole: 'ROOT',
+    canonicalContract: canonicalContract('delivery-billing-v1'),
     ...overrides,
   };
 }
@@ -36,6 +40,7 @@ function foundationManifest(overrides = {}) {
     finalObjective: 'Provide a safe reusable AI foundation.',
     thisRepository: '311experience-gisikoubou/ai-dev-foundation',
     repositoryRole: 'ROOT',
+    canonicalContract: canonicalContract('ai-common-platform-v1'),
     ...overrides,
   };
 }
@@ -354,6 +359,8 @@ try {
   assert(blockedTurnCli.status === 2 && JSON.parse(blockedTurnCli.stdout).code === 'CROSS_PROJECT_CONTINUATION_BLOCKED', 'CLI turn-start must block stale cross-project continuation');
   await writeFile(manifestPath, JSON.stringify(manifest({ projectName:'Drifted Working Identity' })), 'utf8');
   assert(observeProjectContextEvidence(manifestPath).code === 'PROJECT_CONTEXT_WORKTREE_DRIFT', 'working Project Context drift from HEAD must stop');
+  await writeFile(manifestPath, JSON.stringify(manifest({ canonicalContract:{ ...manifest().canonicalContract, contractVersion:'2' } })), 'utf8');
+  assert(observeProjectContextEvidence(manifestPath).code === 'CANONICAL_CONTRACT_WORKTREE_DRIFT', 'working canonical contract drift from HEAD must stop');
   await writeFile(manifestPath, JSON.stringify(manifest()), 'utf8');
   const childDir = join(temp, 'child-worktree'); await mkdir(childDir); const childManifest = join(childDir, 'PROJECT_CONTEXT.json'); await writeFile(childManifest, JSON.stringify(manifest()), 'utf8');
   const envOverride = spawnSync(process.execPath, [guardPath, '--context-file', childManifest, '--state-file', statePath], { encoding: 'utf8', env: { ...process.env, GIT_DIR: join(temp, '.git'), GIT_WORK_TREE: childDir } });

@@ -40,6 +40,20 @@ It fixes (all identity text must be resolved; placeholder-only values such as `U
 
 Project Root identity changes only by an explicit human project-ownership/goal decision. The guard has no automatic context-transition mode. A canonical `PROJECT_CONTEXT.json` identity change is a separate human-gated project-definition change; recent work volume, current branch, task duration, latest PR, or last-touched repository never changes it.
 
+## Canonical Contract Gate
+
+`PROJECT_CONTEXT.json` also carries the repository's `canonicalContract`. Project identity and mutable specification authority remain separate: changing an approved design/spec version changes the Contract fingerprint, not the stable Project Context fingerprint.
+
+Before implementation authority is selected, run:
+
+```text
+node .agents/skills/handoff/canonical-contract-gate.mjs --context-file PROJECT_CONTEXT.json --state-json <contract-work-state-json> --pretty
+```
+
+The contract records CURRENT, SUPERSEDED, HISTORICAL, and DRAFT artifacts by stable slot. Exactly one CURRENT artifact may exist per slot. SUPERSEDED artifacts may remain in the repository for history but can never appear in `usedSpecIds` as implementation authority. DESIGN artifacts carry a visual contract identity/version/scope and baseline type. A work state binds the exact repository, contract ID/version, selected target per slot, specs actually used, and Functional Gate result. `CANONICAL_TARGET_MISMATCH`, `SUPERSEDED_SPEC_USED`, missing/ambiguous contracts, cross-repository references, or missing CURRENT source files are STOP.
+
+At ordinary turn-start, `project-context-guard.mjs --turn-start` validates the Contract and its committed CURRENT sources automatically. Normal aligned work continues without a human confirmation. Contract conflicts are technical STOPs for AI-owned correction unless the conflict represents a genuine unresolved human specification decision.
+
 ## Project-local Working Memory
 
 Project Context validates **which project** is active; it does not retain mutable human decisions or approved references. When a local repository execution route is available, use the sibling `project-working-memory.mjs` after Project Context validation so those decisions survive chat/session loss without becoming common/global memory.

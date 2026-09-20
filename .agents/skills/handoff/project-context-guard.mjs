@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { validateCanonicalContract, verifyCanonicalSources } from './canonical-contract-gate.mjs';
 
 const EXPECTED_SECTION_ORDER = ['projectRoot', 'currentState', 'relatedWork', 'nextAction'];
 const REQUIRED_HEADINGS = ['## Project Root', '## Current State', '## Related Work', '## Next Action'];
@@ -233,6 +234,8 @@ export function observeProjectContextEvidence(contextFile) {
   catch { return stop('PROJECT_CONTEXT_FILE_INVALID', 'PROJECT_CONTEXT.json is missing, malformed, or contains duplicate keys.'); }
   const workingNormalized = normalizeManifest(workingManifest);
   if (workingNormalized.error) return workingNormalized.error;
+  const workingContract = validateCanonicalContract(workingManifest);
+  if (workingContract.result === 'STOP') return workingContract;
   const repositoryEvidence = actualRepoForContextFile(resolvedContextFile);
   if (repositoryEvidence.error) return repositoryEvidence.error;
   const committedResult = spawnSync('git', ['-C', contextDir, 'show', headSha + ':PROJECT_CONTEXT.json'], { windowsHide:true, timeout:5000, env:gitEnv });
@@ -243,16 +246,21 @@ export function observeProjectContextEvidence(contextFile) {
   try { committedManifest = parseJsonStrict(committedText); } catch { return stop('PROJECT_CONTEXT_COMMITTED_EVIDENCE_INVALID', 'Committed PROJECT_CONTEXT.json is malformed or contains duplicate keys.'); }
   const committedNormalized = normalizeManifest(committedManifest);
   if (committedNormalized.error) return stop('PROJECT_CONTEXT_COMMITTED_EVIDENCE_INVALID', 'Committed PROJECT_CONTEXT.json is invalid.');
+  const committedContract = validateCanonicalContract(committedManifest);
+  if (committedContract.result === 'STOP') return stop('CANONICAL_CONTRACT_COMMITTED_EVIDENCE_INVALID', 'Committed PROJECT_CONTEXT.json canonicalContract is invalid.', { contractCode: committedContract.code });
   const working = workingNormalized.value;
   const m = committedNormalized.value;
   if (JSON.stringify(working) !== JSON.stringify(m)) return stop('PROJECT_CONTEXT_WORKTREE_DRIFT', 'Working PROJECT_CONTEXT.json differs from the committed project identity.');
+  if (workingContract.contractFingerprint !== committedContract.contractFingerprint) return stop('CANONICAL_CONTRACT_WORKTREE_DRIFT', 'Working canonicalContract differs from the contract committed at the captured Git HEAD.', { committedContractId: committedContract.contractId, committedContractVersion: committedContract.contractVersion });
+  const contractSources = verifyCanonicalSources(resolvedContextFile, committedManifest);
+  if (contractSources.result === 'STOP') return contractSources;
   if (repositoryEvidence.repository !== m.thisRepo) return stop('PROJECT_CONTEXT_REPOSITORY_DRIFT', 'Committed PROJECT_CONTEXT.json thisRepository does not match the actual origin repository.');
   const endBranch = decodeGitSingleLine(spawnSync('git', ['-C', contextDir, 'branch', '--show-current'], { windowsHide:true, timeout:5000, env:gitEnv }));
   const endHead = decodeGitSingleLine(spawnSync('git', ['-C', contextDir, 'rev-parse', 'HEAD'], { windowsHide:true, timeout:5000, env:gitEnv }));
   if (endBranch !== currentBranch || endHead !== headSha) return stop('PROJECT_CONTEXT_CHANGED_DURING_OBSERVATION', 'Branch or HEAD changed while Project Guard was collecting evidence.');
   return {
     result:'PROCEED', projectContextId:m.projectContextId, projectRootRepository:m.rootRepo, thisRepository:m.thisRepo,
-    contextFingerprint:fingerprint(m), actualRepository:repositoryEvidence.repository, worktreeRepository:repositoryEvidence.repository,
+    contextFingerprint:fingerprint(m), canonicalContract:{ contractId:committedContract.contractId, contractVersion:committedContract.contractVersion, contractFingerprint:committedContract.contractFingerprint, canonicalTargets:committedContract.canonicalTargets }, actualRepository:repositoryEvidence.repository, worktreeRepository:repositoryEvidence.repository,
     currentBranch, headSha, observedAt:new Date().toISOString(),
   };
 }
@@ -305,6 +313,8 @@ export function validateProjectContext(manifestInput, stateInput) {
 export function validateTurnContinuation(manifestInput, stateInput) {
   const normalized = normalizeManifest(manifestInput);
   if (normalized.error) return normalized.error;
+  const contract = validateCanonicalContract(manifestInput);
+  if (contract.result === 'STOP') return contract;
   const m = normalized.value;
   if (m.repositoryRole !== 'ROOT') return stop('PROJECT_CONTEXT_CANONICAL_ROOT_REQUIRED', 'Turn-start continuation must use the canonical PROJECT_CONTEXT.json from the active Project Root repository.');
 
@@ -343,6 +353,7 @@ export function validateTurnContinuation(manifestInput, stateInput) {
     projectContextId: m.projectContextId,
     projectRootRepository: m.rootRepo,
     contextFingerprint: canonicalFingerprint,
+    canonicalContract: { contractId: contract.contractId, contractVersion: contract.contractVersion, contractFingerprint: contract.contractFingerprint, canonicalTargets: contract.canonicalTargets },
     nextAction: 'CONTINUE_WITHIN_ACTIVE_PROJECT',
   };
 }
@@ -471,6 +482,10 @@ async function main() {
   if (repoEvidence.repository !== normalizedManifest.value.thisRepo) {
     const mismatch = stop('PROJECT_CONTEXT_REPOSITORY_DRIFT', 'PROJECT_CONTEXT.json thisRepository does not match the actual origin repository.', { expectedThisRepository: normalizedManifest.value.thisRepo, actualRepository: repoEvidence.repository });
     process.stdout.write(JSON.stringify(mismatch) + '\n'); process.exitCode = 2; return;
+  }
+  if (parsed.flags.has('--turn-start')) {
+    const observed = observeProjectContextEvidence(contextFile);
+    if (observed.result === 'STOP') { process.stdout.write(JSON.stringify(observed) + '\n'); process.exitCode = 2; return; }
   }
   const handoffFile = parsed.valued.get('--handoff-file');
   const stateFile = parsed.valued.get('--state-file'); const stateJson = parsed.valued.get('--state-json');
