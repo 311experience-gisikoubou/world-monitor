@@ -248,6 +248,8 @@ SUPERSEDED_SPEC_USED=NO
 
 A Functional Gate PASS never overrides Contract Gate FAIL. Missing/ambiguous CURRENT authority, use of a SUPERSEDED/HISTORICAL/DRAFT spec, a cross-project contract, or an implementation target different from the CURRENT artifact is a merge blocker. Normal Contract PASS adds no human confirmation.
 
+When `human-decision-sync` is required, also run `.agents/skills/handoff/human-decision-sync.mjs` against the exact current HEAD `PROJECT_CONTEXT.json` and the decision IDs actually relied on by the audited change. `DECISION_CONFLICT`, `PROPOSED_DECISION_USED`, `UNRESOLVED_DECISION_USED`, missing required decision state, or human-decision worktree drift is a merge blocker. A confirmed decision may bind a canonical artifact only while that artifact remains CURRENT.
+
 ### `PREPARED_FOR_MERGE` criteria
 
 Report `PREPARED_FOR_MERGE=yes` only when all applicable conditions are proven:

@@ -34,6 +34,7 @@ try{
     finalObjective:'Deliver the approved app safely.',
     thisRepository:'acme/app',
     repositoryRole:'ROOT',
+    canonicalContract:{schemaVersion:1,contractId:'app-v1-contract',contractVersion:'1',approved:true,artifacts:[{id:'app-v1-baseline',kind:'GOVERNANCE',slot:'project-baseline',status:'CURRENT',sources:['PROJECT_CONTEXT.json']}],protectedDecisions:[],requiredValidation:['canonical-contract-gate']},
   };
   await writeFile(join(root,'PROJECT_CONTEXT.json'),JSON.stringify(context,null,2)+'\n','utf8');
   await mkdir(join(root,'design'),{recursive:true});

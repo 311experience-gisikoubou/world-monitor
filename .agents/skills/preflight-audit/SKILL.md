@@ -221,6 +221,8 @@ node .agents/skills/handoff/canonical-contract-gate.mjs --context-file PROJECT_C
 
 Proceed only on `contractGate=PASS`. An old file may be inspected as history, but a SUPERSEDED/HISTORICAL/DRAFT artifact must not appear in `usedSpecIds`. If the selected implementation target differs from the CURRENT artifact for that slot, stop before implementation and correct the scope. This is an upstream scope check, not another build/test pass, and it must not create a new human confirmation on the normal PASS path.
 
+When `canonicalContract.requiredValidation` includes `human-decision-sync`, also read `PROJECT_CONTEXT.json.humanDecisionSync` before implementation. Use `.agents/skills/handoff/human-decision-sync.mjs` for any decision IDs that the intended work relies on. Only `CONFIRMED` decisions may be selected as current authority; `DEPRECATED`, `PROPOSED`, and `UNRESOLVED` selections are STOP. The snapshot from the same registry supplies current state and next action so conversation memory or older documents cannot silently override the latest explicit human decision. Normal PASS adds no human confirmation.
+
 ## Machine Gate
 
 When Node.js and Git are available in the local execution workspace being used for the change, run the dependency-free security gate before semantic checks.

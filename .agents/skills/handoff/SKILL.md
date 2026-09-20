@@ -54,9 +54,17 @@ The contract records CURRENT, SUPERSEDED, HISTORICAL, and DRAFT artifacts by sta
 
 At ordinary turn-start, `project-context-guard.mjs --turn-start` validates the Contract and its committed CURRENT sources automatically. Normal aligned work continues without a human confirmation. Contract conflicts are technical STOPs for AI-owned correction unless the conflict represents a genuine unresolved human specification decision.
 
+## Human Decision Sync
+
+When `canonicalContract.requiredValidation` includes `human-decision-sync`, `PROJECT_CONTEXT.json.humanDecisionSync` is the tracked project source of truth for explicit human-confirmed mutable decisions. Store only decisions the human actually resolved; brainstorming and AI suggestions remain `PROPOSED`, open choices remain `UNRESOLVED`, accepted authority is `CONFIRMED`, and replaced authority remains visible as `DEPRECATED`.
+
+Run `.agents/skills/handoff/human-decision-sync.mjs` before relying on decision IDs. Only `CONFIRMED` decisions can drive implementation. `DEPRECATED`, `PROPOSED`, or `UNRESOLVED` selection is a STOP. A confirmed decision that names canonical artifact IDs is valid only while those artifacts remain `CURRENT`. `--turn-start` returns the confirmed/deprecated/unresolved/proposed registry together with `currentState` and `nextAction`, so a new chat can recover the authoritative decision state without trusting conversation memory.
+
+Conversation memory, summaries, old chats, and AI inference are supporting evidence only. If a new explicit human decision supersedes the tracked state, synchronize `PROJECT_CONTEXT.json` and deprecate the old decision before continuing implementation. Do not auto-promote every conversation statement into the registry.
+
 ## Project-local Working Memory
 
-Project Context validates **which project** is active; it does not retain mutable human decisions or approved references. When a local repository execution route is available, use the sibling `project-working-memory.mjs` after Project Context validation so those decisions survive chat/session loss without becoming common/global memory.
+Human Decision Sync retains tracked confirmed project authority. The sibling `project-working-memory.mjs` remains a Git-excluded local convenience for transient Current Goal / Approved Reference / Last Human Decision / Next Step and artifact recall; it is never allowed to override `PROJECT_CONTEXT.json.humanDecisionSync` or the Canonical Contract. When a local repository execution route is available, use it after Project Context validation for short-lived continuity.
 
 The live file is `.ai/working/project-memory.json`. The helper binds it to the committed Project Context ID/fingerprint and exact GitHub origin, adds `/.ai/working/` only to the repository-local `.git/info/exclude`, and refuses a tracked or cross-project memory file. Do not place patient, clinic, billing, sales, credential, protected, or other real sensitive data in it.
 

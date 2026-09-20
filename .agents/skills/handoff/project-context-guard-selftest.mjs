@@ -17,6 +17,9 @@ function complete(markdown) { return markdown; }
 function canonicalContract(id) {
   return { schemaVersion:1, contractId:id + '-contract', contractVersion:'1', approved:true, artifacts:[{ id:id + '-baseline', kind:'GOVERNANCE', slot:'project-baseline', status:'CURRENT', sources:['PROJECT_CONTEXT.json'] }], protectedDecisions:[], requiredValidation:['canonical-contract-gate'] };
 }
+function decisionSync(id) {
+  return { schemaVersion:1, decisions:[{ id:id + '-decision', topic:'current-authority', status:'CONFIRMED', summary:'Use the current human-approved authority.', decidedAt:'2026-09-20', source:'EXPLICIT_HUMAN', type:'GOVERNANCE', replaces:null, artifactIds:[id + '-baseline'] }], currentState:'Human decision state is current.', nextAction:'Continue from the confirmed repository decision.' };
+}
 function manifest(overrides = {}) {
   return {
     schemaVersion: 1,
@@ -40,7 +43,8 @@ function foundationManifest(overrides = {}) {
     finalObjective: 'Provide a safe reusable AI foundation.',
     thisRepository: '311experience-gisikoubou/ai-dev-foundation',
     repositoryRole: 'ROOT',
-    canonicalContract: canonicalContract('ai-common-platform-v1'),
+    canonicalContract: { ...canonicalContract('ai-common-platform-v1'), requiredValidation:['canonical-contract-gate','human-decision-sync'] },
+    humanDecisionSync: decisionSync('ai-common-platform-v1'),
     ...overrides,
   };
 }
@@ -78,6 +82,8 @@ function state(overrides = {}) {
 {
   const result = validateTurnContinuation(foundationManifest(), turnState());
   assert(result.code === 'TURN_CONTEXT_ALIGNED' && result.nextAction === 'CONTINUE_WITHIN_ACTIVE_PROJECT', 'same-project implicit continuation should pass');
+  assert(result.humanDecisionSync.activeDecisions[0].id === 'ai-common-platform-v1-decision', 'turn-start should surface confirmed human decisions from PROJECT_CONTEXT');
+  assert(result.humanDecisionSync.currentState === 'Human decision state is current.' && result.humanDecisionSync.nextAction === 'Continue from the confirmed repository decision.', 'turn-start should restore current state and next action without chat memory');
 }
 {
   const result = validateTurnContinuation(foundationManifest(), turnState({ candidateProjectContextId: 'delivery-billing-v1', candidateContextFingerprint: BASE_FINGERPRINT }));
