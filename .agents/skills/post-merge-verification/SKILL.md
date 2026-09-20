@@ -25,7 +25,7 @@ Use after a PR has already been merged on the remote host and the user asks to v
 - Local `main` and `origin/main` SHA equality
 - Final working tree status
 - Branch deletion safety judgment
-- Authorization provenance: verify that a valid `MERGE_AUTHORIZATION_V1` receipt for the exact merged PR and exact pre-merge HEAD existed **before** `merged_at`; later approval is never retroactive authorization
+- Authorization provenance: verify that a valid `MERGE_AUTHORIZATION_V1` receipt for the exact merged PR and exact pre-merge HEAD existed **before** `merged_at`; later approval is never retroactive authorization. Multiple identical valid pre-merge receipts are a hygiene defect, not extra authority; report the duplicate count and do not create another receipt.
 - Audited-base provenance: verify the merge executed against the exact base commit SHA covered by the latest pre-merge PASS audit (`AUDITED_BASE_SHA`)
 
 ## Test Evidence Reuse / No Duplicate Post-Merge Rerun

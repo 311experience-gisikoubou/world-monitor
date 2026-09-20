@@ -64,13 +64,13 @@ Conversation memory, summaries, old chats, and AI inference are supporting evide
 
 ## Project-local Working Memory
 
-Human Decision Sync retains tracked confirmed project authority. The sibling `project-working-memory.mjs` remains a Git-excluded local convenience for transient Current Goal / Approved Reference / Last Human Decision / Next Step and artifact recall; it is never allowed to override `PROJECT_CONTEXT.json.humanDecisionSync` or the Canonical Contract. When a local repository execution route is available, use it after Project Context validation for short-lived continuity.
+Human Decision Sync is the only human-decision authority. The sibling `project-working-memory.mjs` is only a Git-excluded local continuity cache for transient Current Goal / Approved Reference / Next Step and artifact recall. It must not maintain a second human-decision registry or override `PROJECT_CONTEXT.json.humanDecisionSync` or the Canonical Contract. A focus may reference a canonical confirmed decision ID, but that ID is validated against Human Decision Sync rather than copied into local authority state.
 
-The live file is `.ai/working/project-memory.json`. The helper binds it to the committed Project Context ID/fingerprint and exact GitHub origin, adds `/.ai/working/` only to the repository-local `.git/info/exclude`, and refuses a tracked or cross-project memory file. Do not place patient, clinic, billing, sales, credential, protected, or other real sensitive data in it.
+The live file is `.ai/working/project-memory.json`. The helper binds it to the committed Project Context ID/fingerprint and exact GitHub origin, adds `/.ai/working/` only to the repository-local `.git/info/exclude`, and refuses a tracked or cross-project memory file. Schema v2 contains no local `decisions` array. A valid legacy v1 file is migrated by retaining focus/reference continuity while dropping local decision copies and clearing legacy decision links. Do not place patient, clinic, billing, sales, credential, protected, or other real sensitive data in it.
 
-At task start, resume, or before answering "前のやつ / 前に決めたもの", run `ensure` then `snapshot` when this local route is available. The snapshot surfaces exactly the operational fields needed to re-anchor work: Current Goal, Approved Reference, Last Human Decision, and Next Step.
+At task start, resume, or before answering "前のやつ / 前に決めたもの", run `ensure` then `snapshot` when this local route is available. The snapshot surfaces Current Goal, Approved Reference, Next Step, and—only when the current focus names one—the authoritative confirmed Human Decision Sync record.
 
-When the human explicitly adopts, rejects, defers, or changes a value/specification choice, record that decision promptly. AI inference must never be recorded with `source: EXPLICIT_HUMAN`. References use these evidence classes:
+When the human explicitly adopts, rejects, defers, or changes a value/specification choice, update Human Decision Sync rather than local working memory. AI inference must never be promoted to `EXPLICIT_HUMAN`. References use these evidence classes:
 
 - `VERIFIED`: confirmed by an actual file, UI observation, code observation, or explicit human reference evidence.
 - `UNVERIFIED`: existence/name is suggested but the actual artifact has not been confirmed.
@@ -79,7 +79,7 @@ When the human explicitly adopts, rejects, defers, or changes a value/specificat
 
 For a past-artifact request, run `artifact-recall` before presenting an item as existing. Missing or unverified items return `REPORT_MISSING`. Reproduction is allowed only with an explicit reason and must be disclosed as a new reconstruction; the helper returns the required `NEWLY_CREATED` classification and disclosure text. An approved reference that is missing or no longer available is a STOP for substitution: find the real reference or obtain a human value decision instead of silently replacing it.
 
-Use `decision-gate` before finalizing a human-value choice. Technical comparison/verification remains AI-owned; an unresolved human-value decision returns `HUMAN_VALUE_DECISION_REQUIRED`. Use `focus-gate` at meaningful checkpoints when the current task risks drifting from the stored Current Goal.
+Use `human-decision-sync.mjs` before relying on a human-value choice. Technical comparison/verification remains AI-owned; unresolved human-value authority remains blocked by Human Decision Sync. Use `focus-gate` at meaningful checkpoints when the current task risks drifting from the stored Current Goal; any focus `decisionId` must still be present in the canonical confirmed decision set.
 
 This is mechanically `ENFORCED` only where an agent has local repository access and actually invokes the helper. Browser-only environments without that execution hook remain `OPERATIONAL`; do not claim universal browser enforcement.
 
