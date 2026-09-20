@@ -77,6 +77,8 @@ function evidenceFailure(code, prNumber, baseBranch, expectedBaseSha) {
     expectedHeadSha: null,
     authorizationCommentId: null,
     authorizationSource: null,
+    authorizationReceiptMatchCount: 0,
+    duplicateAuthorizationReceiptCount: 0,
   };
 }
 
@@ -200,7 +202,12 @@ function classifyReceipt(comments, { author, prNumber, headSha, nowMs }) {
     return age >= -MAX_FUTURE_SKEW_MS && age <= MAX_RECEIPT_AGE_MS;
   }).sort((a, b) => Date.parse(b.comment.created_at) - Date.parse(a.comment.created_at));
   if (!fresh.length) return { code: 'AUTHORIZATION_RECEIPT_EXPIRED' };
-  return { code: 'AUTHORIZATION_RECEIPT_VALID', item: fresh[0] };
+  return {
+    code: 'AUTHORIZATION_RECEIPT_VALID',
+    item: fresh[0],
+    matchingReceiptCount: fresh.length,
+    duplicateReceiptCount: Math.max(0, fresh.length - 1),
+  };
 }
 
 export function classifyAuthorizationReceipt(comments, options) {
@@ -273,6 +280,8 @@ function classifyAndBuild({ pr, liveBase, comments, author, prNumber, baseBranch
     expectedHeadSha: pass ? headSha : null,
     authorizationCommentId: pass ? receipt.item.comment.id : null,
     authorizationSource: pass ? receipt.item.receipt.source : null,
+    authorizationReceiptMatchCount: pass ? receipt.matchingReceiptCount : 0,
+    duplicateAuthorizationReceiptCount: pass ? receipt.duplicateReceiptCount : 0,
   };
 }
 
@@ -295,6 +304,8 @@ async function main() {
     console.log(`EXPECTED_BASE_SHA=${result.expectedBaseSha}`);
     console.log(`AUTHORIZATION_COMMENT_ID=${result.authorizationCommentId}`);
     console.log(`AUTHORIZATION_SOURCE=${result.authorizationSource}`);
+    console.log(`AUTHORIZATION_RECEIPT_MATCH_COUNT=${result.authorizationReceiptMatchCount}`);
+    console.log(`DUPLICATE_AUTHORIZATION_RECEIPT_COUNT=${result.duplicateAuthorizationReceiptCount}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('MERGE_EXECUTION_GATE=FAIL');

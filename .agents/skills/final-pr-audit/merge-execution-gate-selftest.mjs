@@ -93,6 +93,8 @@ assert.equal(valid.actualBaseSha, BASE_A);
 assert.equal(valid.reportedPrBaseSha, BASE_A);
 assert.equal(valid.authorizationCommentId, 100);
 assert.equal(valid.authorizationSource, 'EXPLICIT_HUMAN');
+assert.equal(valid.authorizationReceiptMatchCount, 1);
+assert.equal(valid.duplicateAuthorizationReceiptCount, 0);
 
 const BASE_WITH_LETTERS = 'abcdefabcdefabcdefabcdefabcdefabcdefabcd';
 const uppercaseExpectedBase = await run(makePr({ base: { ref: 'main', sha: BASE_WITH_LETTERS } }), [comment(receipt())], BASE_WITH_LETTERS.toUpperCase());
@@ -109,6 +111,15 @@ await assert.rejects(
 const persisted = await run(makePr(), [comment(receipt({ source: 'PERSISTED_AFTER_AUDIT' }))]);
 assert.equal(persisted.pass, true);
 assert.equal(persisted.authorizationSource, 'PERSISTED_AFTER_AUDIT');
+
+const duplicateReceipt = await run(makePr(), [
+  comment(receipt(), { id: 100, createdAt: '2026-09-08T10:24:00Z' }),
+  comment(receipt(), { id: 101, createdAt: '2026-09-08T10:25:00Z' }),
+]);
+assert.equal(duplicateReceipt.pass, true, 'duplicate exact receipts do not create new authority or block an otherwise valid merge');
+assert.equal(duplicateReceipt.authorizationCommentId, 101, 'latest valid receipt remains the selected evidence');
+assert.equal(duplicateReceipt.authorizationReceiptMatchCount, 2);
+assert.equal(duplicateReceipt.duplicateAuthorizationReceiptCount, 1);
 
 await expectFail(makePr(), [], 'AUTHORIZATION_RECEIPT_REQUIRED');
 await expectFail(makePr(), [comment(receipt({ head: HEAD_B }))], 'AUTHORIZATION_HEAD_MISMATCH');

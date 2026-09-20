@@ -68,7 +68,15 @@ function makeRepo(repository, projectContextId, registry = null) {
   assert(spawnSync('git', ['init', repo], { encoding:'utf8' }).status === 0, 'temp git init');
   git(repo, ['config','user.email','selftest@example.invalid']); git(repo, ['config','user.name','Selftest']);
   git(repo, ['remote','add','origin','https://github.com/' + repository + '.git']);
-  const manifest={schemaVersion:1,projectContextId,projectName:'Selftest Project',projectRootRepository:repository,finalObjective:'Exercise Project Guard with synthetic local Git evidence only.',thisRepository:repository,repositoryRole:'ROOT'};
+  const manifest={
+    schemaVersion:1,projectContextId,projectName:'Selftest Project',projectRootRepository:repository,
+    finalObjective:'Exercise Project Guard with synthetic local Git evidence only.',thisRepository:repository,repositoryRole:'ROOT',
+    canonicalContract:{
+      schemaVersion:1,contractId:`${projectContextId}-contract`,contractVersion:'1',approved:true,
+      artifacts:[{id:`${projectContextId}-baseline`,kind:'GOVERNANCE',slot:'project-baseline',status:'CURRENT',sources:['PROJECT_CONTEXT.json']}],
+      protectedDecisions:[],requiredValidation:['canonical-contract-gate'],
+    },
+  };
   writeFileSync(join(repo,'PROJECT_CONTEXT.json'),JSON.stringify(manifest,null,2));
   if (registry !== null) { mkdirSync(join(repo,'.agents'),{recursive:true}); writeFileSync(join(repo,'.agents','known-good-paths.json'),JSON.stringify(registry,null,2)); }
   git(repo,['add','.']); git(repo,['commit','-m','selftest fixture']); git(repo,['branch','-M','fixture-main']); return repo;
