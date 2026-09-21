@@ -49,6 +49,13 @@ try{
   assert.equal(out.totals.activationFailures,1);
   assert.equal(out.contracts[0].activationMissing[0].reason,'MARKER_MISSING');
 
+  const stagedContract=CONTRACTS.find(c=>c.id==='staged-reality-checks');
+  assert(stagedContract,'staged reality contract must be registered');
+  assert.equal(stagedContract.required,'TECHNICAL');
+  assert(stagedContract.impl.includes('.agents/skills/test-gate/staged-reality-gate.mjs'));
+  assert(stagedContract.tests.includes('.agents/skills/test-gate/staged-reality-gate-selftest.mjs'));
+  assert(stagedContract.activationEvidence.some(e=>e.path==='tools/portfolio-governance-audit.mjs'&&e.contains==='stagedRealityCurrent'));
+
   const routingContract=CONTRACTS.find(c=>c.id==='executable-implementation-routing');
   assert(routingContract,'executable implementation routing contract must be registered');
   assert.equal(routingContract.required,'TECHNICAL');

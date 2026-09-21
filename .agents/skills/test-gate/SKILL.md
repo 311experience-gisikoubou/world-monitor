@@ -1,11 +1,11 @@
 ---
 name: test-gate
-description: Use after implementation, fixes, refactoring, UI changes, backend changes, or migration changes, including Japanese requests such as 実装後の検証, 修正後のテスト, 必要テストの選択, 型チェック相当, selftest, build, migration test, 実機確認, 未実施確認, or テストゲート. Select and run only verification that is proportionate to the actual changed scope, require machine-readable scope planning before heavy checks, preserve exact-head evidence, and never treat unrun or unavailable checks as passing.
+description: Use during and after implementation, fixes, refactoring, UI changes, backend changes, migration changes, generated-artifact work, or configuration changes, including EARLY / MILESTONE / FINAL REALITY checks and Japanese requests such as 実装途中の確認, 実装後の検証, 修正後のテスト, 必要テストの選択, selftest, build, migration test, 実機確認, 未実施確認, or テストゲート. Select proportionate objective evidence, fail closed on target/state mismatch, preserve exact-state evidence, and never treat unrun or unavailable checks as passing.
 ---
 
 # Test Gate
 
-Use after changes are made and verification is required.
+Use during implementation for staged reality checks and after changes for proportionate verification.
 
 The purpose is to prove the properties affected by the change with the smallest safe verification set. A test is evidence, not a ritual. More tests are not automatically safer when they prove properties unrelated to the diff.
 
@@ -19,6 +19,41 @@ Before selecting checks, identify where the audited change exists and where veri
 - An alternative verification counts as `success` only when it operates on the exact audited source or canonical diff and is technically equivalent to the required property.
 - If equivalence cannot be established, mark the check `unavailable` or `unrun`; never upgrade it to success.
 - Do not make a non-engineer human relay command output between tools when an accessible machine-readable source can provide the evidence.
+
+## Mandatory Staged Reality Checks
+
+`STAGED_REALITY_GATE_REQUIRED=YES`
+
+Do not wait until implementation is complete to discover that the work is aimed at the wrong target. For implementation, bugfix, refactor, migration, generated-artifact, and configuration work, insert objective checkpoints into the existing workflow:
+
+`Context / Authority -> Preflight -> implementation slice -> EARLY CHECK -> milestone work -> MILESTONE CHECK -> implementation completion -> Test Gate -> FINAL REALITY CHECK`.
+
+Run the shared evaluator at each applicable checkpoint:
+
+```text
+<checkpoint-json> | node .agents/skills/test-gate/staged-reality-gate.mjs
+```
+
+Use `phase` = `EARLY_CHECK`, `MILESTONE_CHECK`, or `FINAL_REALITY_CHECK`. Bind every PASS item to the same machine-observed `stateId` (committed/remote Git SHA or deterministic worktree/artifact hash). The gate always requires Git-state and diff evidence, exact repository/project/target/execution-surface identity, and CURRENT authority.
+
+Reality evidence is task-aware rather than UI-centric:
+
+- `UI`: screenshot, DOM, or runtime evidence.
+- `BACKEND_API`: API response, runtime, or targeted-test evidence.
+- `DB_SCHEMA`: schema/state evidence; FINAL requires live DB-state or runtime evidence as well.
+- `CLI_SCRIPT`: CLI output or targeted-test evidence.
+- `GENERATED_ARTIFACT`: generated artifact evidence; FINAL also requires its hash.
+- `DOCS_CONFIG`: document/config consistency or generated-artifact evidence.
+
+`FINAL_REALITY_CHECK` additionally requires the already-completed `test-gate` result as `TEST_GATE_RESULT` evidence. This reuses proof; it does not rerun the same test merely because the workflow moved forward.
+
+A repository, Project Context, work target, execution surface, authority, checkpoint, evidence failure, missing required evidence, or stale `stateId` returns `STOP`. Fix the cause and rerun only the invalidated checkpoint. Do not continue into finer implementation or final PR audit after a failed staged check.
+
+Self-test:
+
+```text
+node .agents/skills/test-gate/staged-reality-gate-selftest.mjs
+```
 
 ## Mandatory Verification Scope Gate
 
