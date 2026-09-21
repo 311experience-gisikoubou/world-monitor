@@ -18,7 +18,7 @@
 ## 共通本体＋アプリ側設定（B分類・技術スタック固有部分を分離）
 
 - **`migration-safety`**：既存migrationの不変性、番号・順序確認、fresh適用／既存DBからのupgrade確認、schema整合性確認、data loss防止、backup・rollbackの判断という共通原則のみを持つ。具体的なDB製品名・migrationツール名・コマンドは含まず、各アプリケーション側の`AGENTS.local.md`を参照する。
-- **`test-gate`**：変更種別に応じた検証選択、軽い検証から重い検証への順序、失敗時停止、検証結果の状態記録という共通ワークフローのみを持つ。具体的な実行コマンドは含まず、各アプリケーション側の`AGENTS.local.md`を参照する。
+- **`test-gate`**：変更種別に応じた検証選択、軽い検証から重い検証への順序、失敗時停止、検証結果の状態記録という共通ワークフローのみを持つ。具体的な実行コマンドは含まず、各アプリケーション側の`AGENTS.local.md`を参照する。 `staged-reality-gate.mjs`でEARLY / MILESTONE / FINAL REALITYの途中AIチェックも実行し、task種別ごとの客観証拠・exact state binding・fail closedで方向ズレを早期検出する。
 - **`final-pr-audit`**：base/head SHA・commit数・変更ファイル・diff範囲・仕様整合性・`test-gate`結果の確認・PRとマージの分離という共通チェック項目のみを持つ。具体的なbuild/test/lintコマンド等は各アプリケーション側の`AGENTS.local.md`を参照する。 Merge execution also uses a short-lived GitHub receipt bound to exact PR + exact HEAD and emits an expected-head SHA only on PASS; private-repository evidence can come from an already-authorized machine-readable GitHub route without copying credentials into the gate.
 
 ## ローカルAI間ハンドオフ（C分類・repository固有の採用判断を伴う）

@@ -251,6 +251,20 @@ node .agents/skills/preflight-audit/implementation-route-receipt.mjs --input <fi
 - Direct-browser implementation has no runner-generated change-set proof and is accepted only through the existing closed exception vocabulary (`HUMAN_EXPLICIT_DIRECT`, `TRIVIAL_SAFE_LOCAL_EDIT`, or `NO_QUALIFIED_EXECUTOR_LOWER_RISK_DIRECT`) with explicit justification/evidence.
 - This receiving-side gate does not claim universal interception of browser turn start. It ensures that a qualified-agent implementation cannot become merge-ready without exact execution evidence, and it does not change merge-authorization semantics.
 
+### Final Reality Check Gate
+
+`FINAL_REALITY_CHECK_REQUIRED=YES`
+
+At the start of final PR audit, require `.agents/skills/test-gate/staged-reality-gate.mjs` to return a `FINAL_REALITY_CHECK` PASS for the exact state being audited. Record:
+
+```text
+FINAL_REALITY_CHECK=PASS
+FINAL_REALITY_STATE=<exact-state-id>
+FINAL_REALITY_RECEIPT=<receipt-id>
+```
+
+The receipt must use task-appropriate objective evidence and include the existing successful `TEST_GATE_RESULT`; do not rerun tests solely to satisfy this receiving-side gate. If the source/diff/state changes after the receipt, the old receipt is stale and blocks merge readiness until the affected reality check is re-evaluated. A test PASS never substitutes for proof that the actual deliverable is the intended target.
+
 ### Contract Conformance Gate
 
 Functional verification and Contract Conformance are independent. Before `PREPARED_FOR_MERGE=yes`, rerun `.agents/skills/handoff/canonical-contract-gate.mjs` against the exact current HEAD contract and the audited implementation target/spec-use state.
@@ -276,6 +290,7 @@ Report `PREPARED_FOR_MERGE=yes` only when all applicable conditions are proven:
 - for `implementation` / `bugfix` / `refactor` / `design-with-source-write` changes, the Implementation Route Receipt Gate returns `MERGE_READY` for the exact current repository/branch/HEAD;
 - Canonical Contract Gate is PASS for the exact audited implementation target, `SUPERSEDED_SPEC_USED=NO`, and the recorded contract ID/version still match the current HEAD;
 - required `test-gate` and real-device/manual checks are PASS or explicitly unneeded;
+- `FINAL_REALITY_CHECK=PASS` is bound to the exact state under final audit;
 - PR description is consistent with verified facts;
 - PR state matches the active protection mode: **Draft when Draft Lock Mode is required**, or the repository's verified stronger server-side protection policy otherwise;
 - fresh GitHub metadata confirms the PR is open and has no known review/required-CI blocker; mergeability may remain blocked solely because the intentional Draft lock is still engaged;
