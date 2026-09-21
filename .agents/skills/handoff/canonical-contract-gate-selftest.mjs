@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -102,4 +102,38 @@ const cli=spawnSync(process.execPath,[gatePath,'--context-file',join(root,'PROJE
 assert.equal(cli.status,0);
 assert.equal(JSON.parse(cli.stdout).contractGate,'PASS');
 
-console.log('CANONICAL_CONTRACT_GATE_SELFTEST=PASS cases=A,B,C,D,E,F,G incident_fixture=STOP');
+// REFERENCE_IMAGE fixture: CURRENT registry + current image must align with design scope and sources.
+const refRoot=mkdtempSync(join(tmpdir(),'canonical-ui-reference-selftest-'));
+mkdirSync(join(refRoot,'docs','ui-reference','current'),{recursive:true});
+const refManifest=manifest({canonicalContract:{
+  ...manifest().canonicalContract,contractVersion:'2',artifacts:[{
+    id:'home-ui-v2',kind:'DESIGN',slot:'home-ui',status:'CURRENT',
+    sources:['docs/ui-reference/CURRENT.json','docs/ui-reference/current/home.png'],
+    visual:{designId:'home-ui-v2',version:'2',scope:['home'],baseline:'REFERENCE_IMAGE'},
+  }],
+}});
+writeFileSync(join(refRoot,'PROJECT_CONTEXT.json'),JSON.stringify(refManifest,null,2));
+writeFileSync(join(refRoot,'docs','ui-reference','current','home.png'),'reference-image');
+writeFileSync(join(refRoot,'docs','ui-reference','CURRENT.json'),JSON.stringify({schemaVersion:1,references:[{
+  artifactId:'home-ui-v2',viewId:'home',image:'docs/ui-reference/current/home.png',approvedAt:'2026-09-21',
+  viewport:{width:1440,height:900},browserZoom:100,devicePixelRatio:1,browser:'Chrome',fontFamily:'Arial',
+}]},null,2));
+spawnSync('git',['init',refRoot],{encoding:'utf8'});
+spawnSync('git',['-C',refRoot,'config','user.email','selftest@example.invalid'],{encoding:'utf8'});
+spawnSync('git',['-C',refRoot,'config','user.name','Selftest'],{encoding:'utf8'});
+spawnSync('git',['-C',refRoot,'add','.'],{encoding:'utf8'});
+assert.equal(spawnSync('git',['-C',refRoot,'commit','-m','valid reference'],{encoding:'utf8'}).status,0);
+const refPass=spawnSync(process.execPath,[gatePath,'--context-file',join(refRoot,'PROJECT_CONTEXT.json')],{encoding:'utf8'});
+assert.equal(refPass.status,0);
+assert.equal(JSON.parse(refPass.stdout).uiReferenceConfigured,true);
+
+const badRegistry=JSON.parse(readFileSync(join(refRoot,'docs','ui-reference','CURRENT.json'),'utf8'));
+badRegistry.references[0].viewId='other';
+writeFileSync(join(refRoot,'docs','ui-reference','CURRENT.json'),JSON.stringify(badRegistry,null,2));
+spawnSync('git',['-C',refRoot,'add','docs/ui-reference/CURRENT.json'],{encoding:'utf8'});
+assert.equal(spawnSync('git',['-C',refRoot,'commit','-m','bad scope'],{encoding:'utf8'}).status,0);
+const refStop=spawnSync(process.execPath,[gatePath,'--context-file',join(refRoot,'PROJECT_CONTEXT.json')],{encoding:'utf8'});
+assert.equal(refStop.status,2);
+assert.equal(JSON.parse(refStop.stdout).code,'UI_REFERENCE_SCOPE_MISMATCH');
+
+console.log('CANONICAL_CONTRACT_GATE_SELFTEST=PASS cases=A,B,C,D,E,F,G ui_reference=PASS incident_fixture=STOP');
