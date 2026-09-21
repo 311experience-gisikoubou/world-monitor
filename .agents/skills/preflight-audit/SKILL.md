@@ -100,6 +100,34 @@ Router self-test:
 node .agents/skills/preflight-audit/ai-task-router-selftest.mjs .agents/skills/preflight-audit/ai-task-router.mjs
 ```
 
+### Machine-readable implementation route receipt
+
+The router selects a route; it does not itself prove that the selection was honored before or after the work. `.agents/skills/preflight-audit/implementation-route-receipt.mjs` closes that gap for the specific failure this phase targets: routing evidence that only lives in chat and is never actually enforced, including a ChatGPT/browser direct executor quietly doing `implementation`, `bugfix`, `refactor`, or `design-with-source-write` work.
+
+Before starting implementation work, record a pre-implementation routing authorization:
+
+```text
+node .agents/skills/preflight-audit/implementation-route-receipt.mjs --input <pre-implementation-receipt.json> --pretty
+```
+
+After the work lands, finalize the same binding with the exact 40-character implementation HEAD:
+
+```text
+node .agents/skills/preflight-audit/implementation-route-receipt.mjs --input <final-receipt.json> --pretty
+```
+
+- The schema is closed to `schemaVersion`, `stage` (`pre-implementation` or `final`), `task.id`/`task.kind`, `executor.id`/`executor.provider`/`executor.routeType`, `repository.owner`/`repository.name`, `branch`, `allowedScope`, `dataClass` (`source-only` / `synthetic` / `public` only), `costPolicy` (`no-new-cost` only), optional `requestedAuthorities`, an optional `exception`, and — at `stage: final` only — the exact 40-character `implementationHead`.
+- For `implementation`, `bugfix`, `refactor`, and `design-with-source-write`, an `executor.routeType` of `direct-browser` (a ChatGPT/browser direct executor) is rejected by default with `DIRECT_EXECUTOR_EXCEPTION_REQUIRED`.
+- A direct executor is permitted only through a closed exception vocabulary — `HUMAN_EXPLICIT_DIRECT`, `TRIVIAL_SAFE_LOCAL_EDIT`, `NO_QUALIFIED_EXECUTOR_LOWER_RISK_DIRECT` — plus a non-empty bounded `justification` and `evidenceConfirmed: true`. No matching exception means `STOP`, never a silent pass.
+- `main`, `master`, and `trunk` branches, protected/real data classes, unknown cost, and `merge` / `production` / `destructive` requested authorities are rejected; malformed repository/branch/scope/head values fail schema-closed.
+- This is a **local pre-work gate plus a final-audit-bound receipt**, not a universal enforcement of what happens inside a browser turn. It cannot force a ChatGPT browser session to call this script before it starts typing; it can only make the routing evidence and the final-PR gate below mechanically check the receipt that was (or was not) produced.
+
+Selftest:
+
+```text
+node .agents/skills/preflight-audit/implementation-route-receipt-selftest.mjs .agents/skills/preflight-audit/implementation-route-receipt.mjs
+```
+
 ### Machine-readable provider inventory
 
 Before building a current `prompt-cli` route set, use `.agents/skills/preflight-audit/ai-provider-inventory.mjs` to turn measured local provider facts into router-compatible route records.
@@ -180,6 +208,30 @@ Runner self-test:
 
 ```text
 node .agents/skills/preflight-audit/claude-subscription-runner-selftest.mjs .agents/skills/preflight-audit/claude-subscription-runner.mjs
+```
+
+Claude executable implementation route:
+
+```text
+<closed-implementation-task-json-stream> | node .agents/skills/preflight-audit/implementation-orchestrator.mjs --pretty
+```
+
+For source implementation work, `claude-implementation-write` is the default executor only while its current readiness evidence qualifies it. `implementation-orchestrator.mjs` is the single normal entry point: it builds the bounded Claude route, asks `ai-task-router.mjs` to select it, issues the pre-implementation route authorization, verifies the feature repository/branch and GitHub-shaped `origin` identity, and invokes `implementation-runner.mjs` only when that exact Claude route was selected. Claude unavailable or unqualified is a fail-closed STOP; the orchestrator never silently substitutes ChatGPT direct execution.
+
+The task schema requires a clean feature worktree plus exact repository `{owner,name}`, `repoRoot`, `branch`, and a non-empty `allowedScope`. Scope entries are either exact repo-relative paths or a directory prefix ending in `/**`; arbitrary wildcard patterns are rejected. The runner independently repeats the repository/branch/origin checks immediately before Claude invocation. Its hard model tool boundary is `Read,Write,Edit,Glob,Grep` only — no `Bash`, git, network tool, permission bypass, merge, push, or production authority. Provider/cloud credential environment variables are rejected before invocation.
+
+After Claude returns, the runner observes the complete changed-path set, including modified, deleted, and new/untracked files, rejects every path outside `allowedScope`, and generates deterministic change-set evidence (`preHead`, `changeSetSha256`, sorted `changedPaths`). The later final implementation-route receipt recomputes the same change set from the recorded `preHead` to the exact committed implementation HEAD. This proves the committed source result matches the bounded Claude execution without storing source contents in the receipt.
+
+Deterministic surrounding work such as targeted tests, commit, push, Draft PR creation, and final audit stays outside the model process and may be performed by the existing reviewed workflow. That separation does not change the fact that Claude is the source-edit implementation executor. Codex has no write-capable runner in this release and may be used for implementation only after a separate qualification; Gemini/Antigravity remain review/alternative-analysis routes unless separately qualified. ChatGPT direct source implementation is an explicit exception, not the normal route.
+
+`provider-adapter-readiness.mjs` records this route's general auth/tool/cost readiness under `readiness.claudeImplementation`, but its repository boundary stays per-task: general readiness can never certify a specific repository/branch. Browser turn start is not universally interceptable; enforcement is completed at the receiving side because `final-pr-audit` cannot report an in-scope qualified-agent implementation `MERGE READY` without an exact final route receipt.
+
+Self-tests:
+
+```text
+node .agents/skills/preflight-audit/implementation-runner-selftest.mjs .agents/skills/preflight-audit/implementation-runner.mjs
+node .agents/skills/preflight-audit/implementation-route-receipt-selftest.mjs .agents/skills/preflight-audit/implementation-route-receipt.mjs
+node .agents/skills/preflight-audit/implementation-orchestrator-selftest.mjs .agents/skills/preflight-audit/implementation-orchestrator.mjs
 ```
 
 ## Execution / Evidence Location

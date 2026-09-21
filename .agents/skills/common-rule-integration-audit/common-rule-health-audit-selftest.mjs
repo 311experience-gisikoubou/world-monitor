@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 const arg=process.argv[2];
 if(!arg) throw new Error('audit path required');
-const {auditRuleHealth}=await import(pathToFileURL(resolve(arg)).href);
+const {auditRuleHealth,CONTRACTS}=await import(pathToFileURL(resolve(arg)).href);
 const root=await mkdtemp(join(tmpdir(),'rule-health-selftest-'));
 async function put(path,text){await mkdir(join(root,...path.split('/').slice(0,-1)),{recursive:true});await writeFile(join(root,...path.split('/')),text,'utf8');}
 const contract={id:'x',required:'TECHNICAL',docs:['RULE.md'],impl:['impl.mjs'],tests:['test.mjs']};
@@ -47,6 +47,25 @@ try{
   assert.equal(out.ok,false);
   assert.equal(out.contracts[0].state,'DECLARATION_ONLY');
   assert.equal(out.totals.activationFailures,1);
+  assert.equal(out.contracts[0].activationMissing[0].reason,'MARKER_MISSING');
+
+  const routingContract=CONTRACTS.find(c=>c.id==='executable-implementation-routing');
+  assert(routingContract,'executable implementation routing contract must be registered');
+  assert.equal(routingContract.required,'TECHNICAL');
+  assert(routingContract.impl.includes('.agents/skills/preflight-audit/implementation-orchestrator.mjs'));
+  assert(routingContract.tests.includes('.agents/skills/preflight-audit/implementation-orchestrator-selftest.mjs'));
+  const finalAuditActivation=routingContract.activationEvidence.find(e=>e.path==='.agents/skills/final-pr-audit/SKILL.md');
+  assert.equal(finalAuditActivation?.contains,'IMPLEMENTATION_ROUTE_RECEIPT_REQUIRED=YES');
+
+  const routingActivation={...contract,id:'routing-activation',activationEvidence:[{path:'.agents/skills/final-pr-audit/SKILL.md',contains:'IMPLEMENTATION_ROUTE_RECEIPT_REQUIRED=YES'}]};
+  await put('.agents/skills/final-pr-audit/SKILL.md','# Final audit\n\nIMPLEMENTATION_ROUTE_RECEIPT_REQUIRED=YES\n');
+  out=await auditRuleHealth({root,contracts:[routingActivation]});
+  assert.equal(out.ok,true);
+  assert.equal(out.contracts[0].state,'ENFORCED');
+  await put('.agents/skills/final-pr-audit/SKILL.md','# Final audit\n');
+  out=await auditRuleHealth({root,contracts:[routingActivation]});
+  assert.equal(out.ok,false);
+  assert.equal(out.contracts[0].state,'DECLARATION_ONLY');
   assert.equal(out.contracts[0].activationMissing[0].reason,'MARKER_MISSING');
 
   await rm(join(root,'impl.mjs'));

@@ -8,6 +8,7 @@ const ALL = [
   'merge-authorization','merge-execution','merge-execution-batch','merge-executor','foundation-sync','foundation-bootstrap','foundation-update','foundation-remote-plan','foundation-batch-rollout',
   'project-context','project-memory','common-rule-health','portfolio-governance','live-base-ref','ai-capacity','ai-provider-inventory','ai-task-router','claude-runner','fast-path','operation-preflight','actions-cost',
   'provider-qualification','provider-readiness','security-history','security-preflight','stagnation','wip-observer','portfolio-health','long-task-wait','merge-readiness','real-device',
+  'implementation-runner','implementation-route-receipt','implementation-orchestrator',
   'full-gate-selector',
 ];
 const COMMANDS = {
@@ -42,6 +43,9 @@ const COMMANDS = {
   'long-task-wait':['node','.agents/skills/long-task-wait/long-task-wait-selftest.mjs'],
   'merge-readiness':['node','.agents/skills/preflight-audit/cross-repo-merge-readiness-selftest.mjs'],
   'real-device':['node','.agents/skills/test-gate/real-device-preparation-gate-selftest.mjs','.agents/skills/test-gate/real-device-preparation-gate.mjs'],
+  'implementation-runner':['node','.agents/skills/preflight-audit/implementation-runner-selftest.mjs','.agents/skills/preflight-audit/implementation-runner.mjs'],
+  'implementation-route-receipt':['node','.agents/skills/preflight-audit/implementation-route-receipt-selftest.mjs','.agents/skills/preflight-audit/implementation-route-receipt.mjs'],
+  'implementation-orchestrator':['node','.agents/skills/preflight-audit/implementation-orchestrator-selftest.mjs','.agents/skills/preflight-audit/implementation-orchestrator.mjs'],
   'full-gate-selector':['node','.agents/skills/preflight-audit/full-gate-selftest-selector-selftest.mjs','.agents/skills/preflight-audit/full-gate-selftest-selector.mjs'],
 };
 const GROUPS = {
@@ -63,6 +67,7 @@ const GROUPS = {
   'real-device':['real-device'],
   'ai-capacity':['ai-capacity'],
   'ai-routing':['ai-provider-inventory','ai-task-router','provider-qualification','provider-readiness'],
+  'implementation-routing':['implementation-runner','implementation-route-receipt','implementation-orchestrator','ai-provider-inventory','ai-task-router','provider-qualification','provider-readiness'],
   'foundation-sync':['foundation-sync','foundation-bootstrap','foundation-update','foundation-remote-plan','foundation-batch-rollout'],
 };
 function pair(path, dir, stem) {
@@ -101,6 +106,7 @@ function familyFor(path) {
   if (pair(path,'.agents/skills/test-gate','real-device-preparation-gate')) return 'real-device';
   if (pair(path,pre,'ai-capacity-observer')) return 'ai-capacity';
   if (['ai-provider-inventory','ai-task-router','provider-adapter-qualification','provider-adapter-readiness'].some(stem => pair(path,pre,stem))) return 'ai-routing';
+  if (['implementation-runner','implementation-route-receipt','implementation-orchestrator'].some(stem => pair(path,pre,stem))) return 'implementation-routing';
   if (['foundation-sync-audit','foundation-bootstrap','foundation-update','foundation-remote-update-plan','foundation-batch-rollout-plan'].some(stem => pair(path,foundation,stem))) return 'foundation-sync';
   return null;
 }

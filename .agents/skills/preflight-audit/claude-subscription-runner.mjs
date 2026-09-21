@@ -17,9 +17,13 @@ const MAX_INPUT_BYTES = 64 * 1024;
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const DEFAULT_TIMEOUT_MS = 60000;
 const SAFE_SUBSCRIPTIONS = new Set(['pro']);
-// Claude Code 2.1.236 binary verified on ai-dev by the dev.55 synthetic safe-route smoke.
-// Any binary update fails closed until a new reviewed attestation is added.
-const TRUSTED_CLAUDE_SHA256 = new Set(['647E736F20C9FF0553C754624CBF8A6DCAC196E8595509D8F63DCE8BBE818757']);
+// Claude Code binaries verified on ai-dev by isolated synthetic safe-route smoke.
+// 2.1.236: dev.55; 2.1.261: dev.106 re-attestation after the local CLI update.
+// Any other binary update fails closed until a new reviewed attestation is added.
+const TRUSTED_CLAUDE_SHA256 = new Set([
+  '647E736F20C9FF0553C754624CBF8A6DCAC196E8595509D8F63DCE8BBE818757',
+  'F2F5D1A155167488AEB32CD263E15436253C7B1681AE147C9E73E4D6BBC3C852',
+]);
 const UNSAFE_ENV_PREFIXES = ['ANTHROPIC_', 'CLAUDE_', 'AWS_', 'GOOGLE_', 'GCLOUD_', 'VERTEX_', 'AZURE_'];
 
 function safeToken(value) {
@@ -42,7 +46,7 @@ export function validateClaudeTask(payload) {
   return errors;
 }
 
-function sanitizedChildEnv(source = process.env) {
+export function sanitizedChildEnv(source = process.env) {
   const env = {};
   for (const key of ['SystemRoot', 'WINDIR', 'USERPROFILE', 'HOME', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'PATH']) {
     if (typeof source[key] === 'string' && source[key]) env[key] = source[key];
@@ -76,7 +80,7 @@ function trustedClaudeBinary(desc) {
 export function isNativeClaudeDescriptor(desc) {
   return Boolean(desc) && typeof desc.file === 'string' && Array.isArray(desc.prefix) && desc.prefix.length === 0;
 }
-function isolateTrustedClaudeBinary(desc, tempRoot) {
+export function isolateTrustedClaudeBinary(desc, tempRoot) {
   if (!isNativeClaudeDescriptor(desc)) return null;
   const isolatedFile = path.join(tempRoot, process.platform === 'win32' ? 'claude-attested.exe' : 'claude-attested');
   try {
@@ -89,13 +93,13 @@ function isolateTrustedClaudeBinary(desc, tempRoot) {
 }
 
 
-function run(desc, args, options = {}) {
+export function run(desc, args, options = {}) {
   return spawnSync(desc.file, [...desc.prefix, ...args], {
     encoding: 'utf8', windowsHide: true, maxBuffer: MAX_OUTPUT_BYTES,
     ...options,
   });
 }
-function subscriptionAuth(desc, env, timeoutMs, cwd) {
+export function subscriptionAuth(desc, env, timeoutMs, cwd) {
   const authRun = run(desc, ['auth', 'status', '--json'], { env, cwd, timeout: Math.min(timeoutMs, 5000) });
   if (authRun.error || authRun.status !== 0) return null;
   try {
@@ -155,7 +159,7 @@ function claudeArgs(emptyMcpConfig) {
     '--system-prompt', 'Use only the supplied prompt. Do not use tools, files, network access, plugins, skills, MCP, or external context. Return only the requested analysis.',
   ];
 }
-function runnerSupport(desc, env, cwd) {
+export function runnerSupport(desc, env, cwd) {
   if (!trustedClaudeBinary(desc)) return false;
   const help = run(desc, ['--help'], { env, cwd, timeout: 5000 });
   if (help.error || help.status !== 0) return false;

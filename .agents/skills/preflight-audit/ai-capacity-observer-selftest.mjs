@@ -11,6 +11,7 @@ const observerUrl = pathToFileURL(resolve(observerArg)).href;
 const {
   sanitizeCodexRateLimits, sanitizeClaudeAuthStatus, buildSummary,
   observeCodex, observeClaude, descriptorForResolvedPath,
+  discoverCodexLocalAppDataCandidates, selectCodexLocalAppDataExecutable,
 } = await import(observerUrl);
 
 const codexRaw = {
@@ -85,6 +86,56 @@ if (invalidMeta.primary.usedPercent !== 0 || invalidMeta.primary.windowDurationM
 
 const missingCodex = sanitizeCodexRateLimits({ result: { rateLimits: {} } });
 if (missingCodex.status !== 'UNAVAILABLE') throw new Error(JSON.stringify(missingCodex));
+
+{
+  const localAppDataRoot = await mkdtemp(join(tmpdir(), 'ai-capacity-observer-localappdata-'));
+  try {
+    if (discoverCodexLocalAppDataCandidates(localAppDataRoot).length !== 0) throw new Error('empty layout must yield no candidates');
+    if (discoverCodexLocalAppDataCandidates(null).length !== 0) throw new Error('missing localAppData must yield no candidates');
+    if (selectCodexLocalAppDataExecutable(localAppDataRoot) !== null) throw new Error('empty layout must select no executable');
+
+    const { mkdir } = await import('node:fs/promises');
+    const binRoot = join(localAppDataRoot, 'OpenAI', 'Codex', 'bin');
+    const hashDirOld = join(binRoot, 'aaaa1111hash');
+    const hashDirNew = join(binRoot, 'zzzz9999hash');
+    const hashDirBroken = join(binRoot, 'bbbb2222hash');
+    await mkdir(hashDirOld, { recursive: true });
+    await mkdir(hashDirNew, { recursive: true });
+    await mkdir(hashDirBroken, { recursive: true });
+    const exeName = process.platform === 'win32' ? 'codex.exe' : 'codex';
+    const exeOld = join(hashDirOld, exeName);
+    const exeNew = join(hashDirNew, exeName);
+    const exeBroken = join(hashDirBroken, exeName);
+    await writeFile(exeOld, 'fake', 'utf8');
+    await writeFile(exeNew, 'fake', 'utf8');
+    await writeFile(exeBroken, 'fake', 'utf8');
+
+    const candidates = discoverCodexLocalAppDataCandidates(localAppDataRoot);
+    if (candidates.length !== 3) throw new Error(`expected 3 candidates, got ${JSON.stringify(candidates)}`);
+
+    const versions = { [exeOld]: '1.2.3', [exeNew]: '1.10.0', [exeBroken]: null };
+    const probeFn = (file) => versions[file] ?? null;
+    const selected = selectCodexLocalAppDataExecutable(localAppDataRoot, probeFn);
+    if (!selected || selected.file !== exeNew) {
+      throw new Error(`expected highest runnable version selected, got ${JSON.stringify(selected)}`);
+    }
+
+    const tieVersions = { [exeOld]: '1.2.3', [exeNew]: '1.2.3', [exeBroken]: null };
+    const tieProbeFn = (file) => tieVersions[file] ?? null;
+    const tieSelected = selectCodexLocalAppDataExecutable(localAppDataRoot, tieProbeFn);
+    const expectedTieWinner = [exeOld, exeNew].sort()[0];
+    if (!tieSelected || tieSelected.file !== expectedTieWinner) {
+      throw new Error(`expected deterministic tie-break winner ${expectedTieWinner}, got ${JSON.stringify(tieSelected)}`);
+    }
+    const tieSelectedAgain = selectCodexLocalAppDataExecutable(localAppDataRoot, tieProbeFn);
+    if (tieSelectedAgain.file !== tieSelected.file) throw new Error('selection must be deterministic across repeated runs');
+
+    const noRunnable = selectCodexLocalAppDataExecutable(localAppDataRoot, () => null);
+    if (noRunnable !== null) throw new Error('unrunnable candidates must never be selected');
+  } finally {
+    await rm(localAppDataRoot, { recursive: true, force: true });
+  }
+}
 
 const tempRoot = await mkdtemp(join(tmpdir(), 'ai-capacity-observer-selftest-'));
 const fakeCli = join(tempRoot, 'fake-cli.mjs');
