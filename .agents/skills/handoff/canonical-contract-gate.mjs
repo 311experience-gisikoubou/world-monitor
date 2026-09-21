@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { normalizeUiReferenceRegistry, referencesForArtifact, UI_REFERENCE_REGISTRY } from './ui-reference-registry.mjs';
 
 const STATUSES = new Set(['CURRENT','SUPERSEDED','HISTORICAL','DRAFT']);
 const KINDS = new Set(['PROJECT','BUSINESS','DESIGN','SECURITY','WORKFLOW','GOVERNANCE']);
@@ -92,6 +93,38 @@ export function validateCanonicalContract(manifest,stateInput=null){
   return pass({...summary,functionalGate:stateInput.functionalGate,targetSelection:selections,usedSpecIds:used});
 }
 
+function verifyUiReferenceSources(root,contract){
+  const designs=contract.artifacts.filter(a=>a.status==='CURRENT'&&a.kind==='DESIGN'&&a.visual?.baseline==='REFERENCE_IMAGE');
+  if(designs.length===0)return pass({uiReferenceConfigured:false});
+  const registryRead=spawnSync('git',['-C',root,'show','HEAD:'+UI_REFERENCE_REGISTRY],{encoding:'utf8',windowsHide:true,timeout:5000});
+  if(registryRead.error||registryRead.status!==0)return stop('UI_REFERENCE_REGISTRY_MISSING','REFERENCE_IMAGE designs require docs/ui-reference/CURRENT.json in Git HEAD.');
+  let raw;try{raw=JSON.parse(String(registryRead.stdout??''));}catch{return stop('UI_REFERENCE_REGISTRY_INVALID','CURRENT.json is not valid JSON.');}
+  const normalized=normalizeUiReferenceRegistry(raw);
+  if(normalized.error)return stop(normalized.error.code,normalized.error.message);
+  const activeIds=new Set(designs.map(a=>a.id));
+  for(const row of normalized.value.references)if(!activeIds.has(row.artifactId))
+    return stop('UI_REFERENCE_REGISTRY_STALE','CURRENT.json references an artifact that is not a CURRENT REFERENCE_IMAGE design.',{artifactId:row.artifactId,viewId:row.viewId});
+  for(const artifact of designs){
+    if(!artifact.sources.includes(UI_REFERENCE_REGISTRY))
+      return stop('UI_REFERENCE_REGISTRY_NOT_CANONICAL','REFERENCE_IMAGE artifact sources must include CURRENT.json.',{artifactId:artifact.id});
+    const rows=referencesForArtifact(normalized.value,artifact.id);
+    if(rows.length===0)return stop('UI_REFERENCE_ENTRY_MISSING','CURRENT design has no approved reference image entry.',{artifactId:artifact.id});
+    const views=rows.map(r=>r.viewId).sort(),scope=[...artifact.visual.scope].sort();
+    if(JSON.stringify(views)!==JSON.stringify(scope))
+      return stop('UI_REFERENCE_SCOPE_MISMATCH','Reference-image views must exactly match the CURRENT design scope.',{artifactId:artifact.id,scope,views});
+    const expected=[UI_REFERENCE_REGISTRY,...rows.map(r=>r.image)].sort(),actual=[...artifact.sources].sort();
+    if(JSON.stringify(expected)!==JSON.stringify(actual))
+      return stop('UI_REFERENCE_SOURCE_MISMATCH','CURRENT design sources must contain only CURRENT.json and its registered current images.',{artifactId:artifact.id,expected,actual});
+  }
+  const tree=spawnSync('git',['-C',root,'ls-tree','-r','-z','--name-only','HEAD','--','docs/ui-reference/current'],{encoding:'utf8',windowsHide:true,timeout:5000});
+  if(tree.error||tree.status!==0)return stop('UI_REFERENCE_TREE_UNAVAILABLE','Could not inspect current UI reference image tree.');
+  const tracked=String(tree.stdout??'').split('\0').filter(Boolean).sort();
+  const registered=normalized.value.references.map(r=>r.image).sort();
+  if(JSON.stringify(tracked)!==JSON.stringify(registered))
+    return stop('UI_REFERENCE_CURRENT_DIR_DRIFT','docs/ui-reference/current must contain exactly the images registered in CURRENT.json.',{tracked,registered});
+  return pass({uiReferenceConfigured:true,uiReferenceCount:registered.length});
+}
+
 export function verifyCanonicalSources(contextFile,manifest){
   const n=normalizeCanonicalContract(manifest);if(n.error)return n.error;
   const root=dirname(resolve(contextFile));
@@ -99,7 +132,8 @@ export function verifyCanonicalSources(contextFile,manifest){
     const r=spawnSync('git',['-C',root,'ls-tree','-z','HEAD','--',source],{encoding:'utf8',windowsHide:true,timeout:5000});
     if(r.error||r.status!==0||!String(r.stdout??'').includes('\t'+source+'\0'))return stop('CANONICAL_SOURCE_MISSING','A CURRENT canonical source is not present as a file in Git HEAD.',{artifactId:a.id,source});
   }
-  return pass({repository:n.value.repository,contractId:n.value.contractId,contractVersion:n.value.contractVersion,contractFingerprint:canonicalContractFingerprint(n.value)});
+  const ui=verifyUiReferenceSources(root,n.value);if(ui.result==='STOP')return ui;
+  return pass({repository:n.value.repository,contractId:n.value.contractId,contractVersion:n.value.contractVersion,contractFingerprint:canonicalContractFingerprint(n.value),uiReferenceConfigured:ui.uiReferenceConfigured===true,uiReferenceCount:ui.uiReferenceCount??0});
 }
 
 function readArg(args,name){const i=args.indexOf(name);if(i<0)return null;if(!args[i+1])throw new Error(name+'_VALUE_REQUIRED');return args[i+1];}
@@ -110,7 +144,9 @@ async function main(){
     if(!contextFile||(stateJson&&stateFile))throw new Error('ARGUMENT_INVALID');
     const manifest=JSON.parse(readFileSync(resolve(contextFile),'utf8'));const sources=verifyCanonicalSources(contextFile,manifest);if(sources.result==='STOP'){console.log(JSON.stringify(sources,null,pretty?2:0));process.exitCode=2;return;}
     const state=stateJson?JSON.parse(stateJson):stateFile?JSON.parse(readFileSync(resolve(stateFile),'utf8')):null;
-    const result=validateCanonicalContract(manifest,state);console.log(JSON.stringify(result,null,pretty?2:0));if(result.result==='STOP')process.exitCode=2;
+    const result=validateCanonicalContract(manifest,state);
+    const output=result.result==='PROCEED'?{...result,uiReferenceConfigured:sources.uiReferenceConfigured===true,uiReferenceCount:sources.uiReferenceCount??0}:result;
+    console.log(JSON.stringify(output,null,pretty?2:0));if(result.result==='STOP')process.exitCode=2;
   }catch(e){console.log(JSON.stringify(stop('CANONICAL_CONTRACT_GATE_ERROR',e?.message||'unknown error'),null,2));process.exitCode=2;}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)await main();

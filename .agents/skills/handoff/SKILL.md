@@ -54,6 +54,24 @@ The contract records CURRENT, SUPERSEDED, HISTORICAL, and DRAFT artifacts by sta
 
 At ordinary turn-start, `project-context-guard.mjs --turn-start` validates the Contract and its committed CURRENT sources automatically. Normal aligned work continues without a human confirmation. Contract conflicts are technical STOPs for AI-owned correction unless the conflict represents a genuine unresolved human specification decision.
 
+## Approved UI Reference Authority
+
+This rule is dormant unless a human explicitly adopts a UI image as the design baseline. Non-UI projects and projects without an approved image do not need a UI-reference folder.
+
+When the human says an image is the baseline/current design, persist that decision instead of relying on conversation memory:
+
+- `docs/ui-reference/CURRENT.json` is the machine-readable active registry.
+- `docs/ui-reference/current/<viewId>.<png|jpg|jpeg|webp>` holds only active approved images.
+- `docs/ui-reference/archive/<viewId>/...` preserves replaced approved images as history; archive files are never current authority.
+- The matching Canonical Contract artifact must be `kind: DESIGN`, `status: CURRENT`, and `visual.baseline: REFERENCE_IMAGE`. Its `visual.scope` must exactly match the registry view IDs, and its sources must be exactly `CURRENT.json` plus those current images.
+- The explicit adoption/replacement is recorded in Human Decision Sync. When a design is replaced, the old canonical artifact becomes `SUPERSEDED`; it may remain for history but cannot drive implementation.
+
+Use `ui-reference-manager.mjs` on a feature branch to adopt a new image. It copies the prior current image to archive, writes the new current image and registry entry, and reports the exact Canonical Contract sources required. It refuses direct adoption on `main`/`master`/`trunk`. The Canonical Contract Gate then validates the committed registry/image/scope/source set at turn-start, preflight, and final audit; stale or ambiguous references STOP.
+
+An approved image means **reproduction, not redesign**. Do not improve, rearrange, add, remove, simplify, or responsively restructure the approved layout without a new human design decision. For implementation, measure the baseline image and existing computed/code evidence for viewport, dimensions, spacing, typography, color, borders, radius, shadow, ordering, density, and text placement. Values that cannot be established may be temporary, but must remain explicitly unknown/temporary rather than being reported as measured facts.
+
+When screenshot capture is available, compare under the same viewport/zoom/DPR/browser conditions and iterate until material visual differences are gone; ±2 px is the default target for element position/dimensions, while environment-dependent antialiasing is excluded. When comparison cannot be executed, report the result as `UNVERIFIED`; never claim reproduction complete merely from implementation. Approved reference images committed to Git must use synthetic/non-sensitive content only—never patient, clinic, billing, sales, credential, or other protected real data.
+
 ## Human Decision Sync
 
 When `canonicalContract.requiredValidation` includes `human-decision-sync`, `PROJECT_CONTEXT.json.humanDecisionSync` is the tracked project source of truth for explicit human-confirmed mutable decisions. Store only decisions the human actually resolved; brainstorming and AI suggestions remain `PROPOSED`, open choices remain `UNRESOLVED`, accepted authority is `CONFIRMED`, and replaced authority remains visible as `DEPRECATED`.
