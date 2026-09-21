@@ -11,6 +11,7 @@ import {
 } from './ai-provider-inventory.mjs';
 import { qualifyAdapters } from './provider-adapter-qualification.mjs';
 import { probeClaudeSubscriptionRunner } from './claude-subscription-runner.mjs';
+import { probeClaudeImplementationRunner } from './implementation-runner.mjs';
 
 const DEFAULT_TIMEOUT_MS = 12000;
 const READ_CAPABILITIES = ['review', 'diagnosis', 'research', 'documentation'];
@@ -111,6 +112,7 @@ export function buildReadiness({
   codex, claude, codexDoctor, codexSupport, claudeAuth, claudeSupport,
   gemini, antigravity, openAiApiKeyPresent,
   anthropicApiKeyPresent, anthropicAuthTokenPresent, claudeRunner,
+  claudeImplementationRunner,
 }) {
   const codexAdapter = baseAdapter('codex-safe-prompt', 'openai', conservativeCodexCapacity(codex?.capacity));
   const claudeAdapter = baseAdapter('claude-safe-prompt', 'anthropic');
@@ -188,6 +190,17 @@ export function buildReadiness({
         cliState: antigravity?.cliStatus === 'AVAILABLE' ? 'AVAILABLE' : 'UNAVAILABLE',
         blockers: ['ADAPTER_NOT_IMPLEMENTED'],
       },
+      // Distinct from `claude`/`claude-safe-prompt` above: this is the bounded
+      // write-capable implementation route (claude-implementation-write). Its
+      // general readiness can prove auth/tool/cost evidence, but repository
+      // boundary evidence is task-specific and is re-verified per invocation
+      // by implementation-runner.mjs, never inferred from this probe alone.
+      claudeImplementation: {
+        authState: claudeImplementationRunner?.evidence?.authentication === 'VERIFIED' ? 'VERIFIED' : 'UNKNOWN',
+        generalEvidenceReady: claudeImplementationRunner?.generalEvidenceReady === true,
+        repositoryBoundaryState: 'VERIFIED_PER_TASK_ONLY',
+        blockers: Array.isArray(claudeImplementationRunner?.blockers) ? claudeImplementationRunner.blockers : ['NOT_RUN'],
+      },
     },
     rule: 'Readiness records measured local evidence only; unsupported cost, tool, data, and fallback claims remain UNKNOWN.',
   };
@@ -224,6 +237,7 @@ async function main() {
   }
   const codexHelp = codexDesc ? run(codexDesc, ['exec', '--help'], 5000) : null;
   const claudeRunner = probeClaudeSubscriptionRunner({ desc: claudeDesc, envSource: process.env, timeoutMs: Math.min(args.timeoutMs, 5000) });
+  const claudeImplementationRunner = probeClaudeImplementationRunner({ desc: claudeDesc, envSource: process.env, timeoutMs: Math.min(args.timeoutMs, 5000) });
   const claudeAuth = claudeRunner.authState === 'VERIFIED'
     ? { status: 'AUTHENTICATED', method: 'CLAUDE_AI', subscriptionType: claudeRunner.subscriptionType }
     : { status: 'UNAVAILABLE', method: null, subscriptionType: null };
@@ -244,6 +258,7 @@ async function main() {
     anthropicApiKeyPresent: Boolean(process.env.ANTHROPIC_API_KEY),
     anthropicAuthTokenPresent: Boolean(process.env.ANTHROPIC_AUTH_TOKEN),
     claudeRunner,
+    claudeImplementationRunner,
   });
   process.stdout.write(`${JSON.stringify(readiness, null, args.pretty ? 2 : 0)}\n`);
 }

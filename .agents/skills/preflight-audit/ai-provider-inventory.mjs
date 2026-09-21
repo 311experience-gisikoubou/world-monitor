@@ -9,6 +9,7 @@ import {
   observeCodex,
   observeClaude,
   descriptorForResolvedPath,
+  selectCodexLocalAppDataExecutable,
 } from './ai-capacity-observer.mjs';
 
 const DEFAULT_TIMEOUT_MS = 12000;
@@ -82,7 +83,13 @@ export function resolveProviderCommand(kind) {
     }
     return descriptorForResolvedPath(candidate);
   }
-  return lookupOnPath(kind);
+  const onPath = lookupOnPath(kind);
+  if (onPath) return onPath;
+  if (kind === 'codex') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    return selectCodexLocalAppDataExecutable(localAppData);
+  }
+  return null;
 }
 
 function versionFrom(text) {

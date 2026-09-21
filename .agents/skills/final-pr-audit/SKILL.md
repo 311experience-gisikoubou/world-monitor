@@ -233,6 +233,24 @@ Without `--execute`, the executor is read-only and returns only a plan. With `--
 The executor performs a read-only preflight for all targets before any mutation, marks only exact authorized Draft targets Ready, reuses the batch merge-execution gate, squash-merges with the exact audited HEAD precondition, and immediately verifies merged PR state, live `main`, merged tree equality, and single-parent equality to the audited base. On pre-merge failure it restores only PRs it changed from Draft to Ready. On partial merge/interruption it never replays a target already proven merged; remaining targets are restored to Draft when safe and may resume from durable GitHub state.
 
 A previously merged target counts as resumable only when the exact audited HEAD still matches the PR, the merge commit tree matches the audited tree, the first/only parent equals the audited base, live `main` still points at that merge commit, and an exact authorization receipt existed **before** `merged_at`. Later approval is never retroactive authorization.
+### Implementation Route Receipt Gate
+
+`IMPLEMENTATION_ROUTE_RECEIPT_REQUIRED=YES`
+
+For `implementation`, `bugfix`, `refactor`, and `design-with-source-write` changes, require a finalized `PASS` implementation-route receipt from `.agents/skills/preflight-audit/implementation-route-receipt.mjs` before `MERGE READY`. This binds the exact repository/branch/current HEAD so a stale or mismatched receipt fails closed rather than being reused by habit.
+
+For a qualified-agent implementation route, verify against the actual local repository so the runner-generated change-set evidence is recomputed from the recorded `preHead` to the exact committed implementation HEAD:
+
+```text
+node .agents/skills/preflight-audit/implementation-route-receipt.mjs --input <final-receipt.json> --expect-owner <owner> --expect-name <repo> --expect-branch <branch> --expect-head <exact-current-head> --repo-root <local-repo-root> --pretty
+```
+
+- `MERGE_READY` requires the receipt's `stage: final` result to already be `PASS` and the repository/branch/head to exactly match the currently audited state; any mismatch returns a fail-closed repository/branch/head error and blocks `PREPARED_FOR_MERGE`.
+- Qualified-agent receipts must carry runner-generated `preHead`, `changeSetSha256`, and the exact sorted `changedPaths`. Final verification recomputes the committed change set, including modified, deleted, and newly added files; missing or mismatched execution evidence blocks merge readiness.
+- A missing receipt for an in-scope kind is a blocker, not `UNKNOWN`-and-proceed.
+- Direct-browser implementation has no runner-generated change-set proof and is accepted only through the existing closed exception vocabulary (`HUMAN_EXPLICIT_DIRECT`, `TRIVIAL_SAFE_LOCAL_EDIT`, or `NO_QUALIFIED_EXECUTOR_LOWER_RISK_DIRECT`) with explicit justification/evidence.
+- This receiving-side gate does not claim universal interception of browser turn start. It ensures that a qualified-agent implementation cannot become merge-ready without exact execution evidence, and it does not change merge-authorization semantics.
+
 ### Contract Conformance Gate
 
 Functional verification and Contract Conformance are independent. Before `PREPARED_FOR_MERGE=yes`, rerun `.agents/skills/handoff/canonical-contract-gate.mjs` against the exact current HEAD contract and the audited implementation target/spec-use state.
@@ -255,6 +273,7 @@ When `human-decision-sync` is required, also run `.agents/skills/handoff/human-d
 Report `PREPARED_FOR_MERGE=yes` only when all applicable conditions are proven:
 
 - final audit result is PASS;
+- for `implementation` / `bugfix` / `refactor` / `design-with-source-write` changes, the Implementation Route Receipt Gate returns `MERGE_READY` for the exact current repository/branch/HEAD;
 - Canonical Contract Gate is PASS for the exact audited implementation target, `SUPERSEDED_SPEC_USED=NO`, and the recorded contract ID/version still match the current HEAD;
 - required `test-gate` and real-device/manual checks are PASS or explicitly unneeded;
 - PR description is consistent with verified facts;

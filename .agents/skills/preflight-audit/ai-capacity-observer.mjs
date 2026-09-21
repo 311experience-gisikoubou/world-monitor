@@ -41,13 +41,69 @@ function lookupOnPath(command) {
   return candidate ? descriptorForResolvedPath(candidate) : null;
 }
 
+function listDirs(root) {
+  try {
+    return fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(root, entry.name));
+  } catch { return []; }
+}
+
+export function discoverCodexLocalAppDataCandidates(localAppData) {
+  if (typeof localAppData !== 'string' || !localAppData) return [];
+  const root = path.join(localAppData, 'OpenAI', 'Codex', 'bin');
+  const exeName = process.platform === 'win32' ? 'codex.exe' : 'codex';
+  return listDirs(root)
+    .map((dir) => path.join(dir, exeName))
+    .filter((file) => fileExists(file))
+    .sort();
+}
+
+function probeCodexVersion(file) {
+  const probe = spawnSync(file, ['--version'], {
+    encoding: 'utf8', windowsHide: true, timeout: 4000, maxBuffer: 64 * 1024,
+  });
+  if (probe.error || probe.status !== 0) return null;
+  return versionFrom(probe.stdout || probe.stderr);
+}
+
+function compareVersions(a, b) {
+  const partsA = a.split('.').map(Number);
+  const partsB = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(partsA.length, partsB.length); i += 1) {
+    const diff = (partsA[i] || 0) - (partsB[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+// Selection rule: only runnable candidates are eligible; the highest probed
+// semver wins; a tie is broken by the lexically smallest install path so
+// repeated runs against the same install set are deterministic.
+export function selectCodexLocalAppDataExecutable(localAppData, probeFn = probeCodexVersion) {
+  const candidates = discoverCodexLocalAppDataCandidates(localAppData);
+  let best = null;
+  for (const candidate of candidates) {
+    const version = probeFn(candidate);
+    if (!version) continue;
+    if (!best || compareVersions(version, best.version) > 0 ||
+        (compareVersions(version, best.version) === 0 && candidate < best.file)) {
+      best = { file: candidate, version };
+    }
+  }
+  return best ? descriptorForResolvedPath(best.file) : null;
+}
+
 function commandDescriptor(kind) {
   const home = os.homedir();
   const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
   if (kind === 'codex') {
     const npmEntry = path.join(appData, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
     if (fileExists(npmEntry)) return { file: process.execPath, prefix: [npmEntry] };
-    return lookupOnPath('codex') || { file: 'codex', prefix: [] };
+    const onPath = lookupOnPath('codex');
+    if (onPath) return onPath;
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    return selectCodexLocalAppDataExecutable(localAppData) || { file: 'codex', prefix: [] };
   }
   const native = process.platform === 'win32' ? path.join(home, '.local', 'bin', 'claude.exe') : path.join(home, '.local', 'bin', 'claude');
   if (fileExists(native)) return { file: native, prefix: [] };
