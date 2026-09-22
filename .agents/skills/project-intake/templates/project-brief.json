@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "intakeId": "example-intake",
+  "intent": "Describe what the user wants to achieve without protected real data.",
+  "scope": "Describe what is in scope and what is explicitly excluded.",
+  "assumptions": [],
+  "humanQuestions": [],
+  "riskSignals": {
+    "protectedOrPatientData": false,
+    "externalCommunication": false,
+    "addedCostOrPaidUsage": false,
+    "authOrIdentity": false,
+    "productionImpact": false,
+    "realDataImpact": false
+  },
+  "status": "DRAFT",
+  "decisionId": null
+}

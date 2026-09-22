@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import process from 'node:process';
+import { isManagedTargetPath } from './managed-surface.mjs';
 
 const args = process.argv.slice(2);
 function argValue(name, fallback = '') {
@@ -18,7 +19,7 @@ function gitBlobSha(content) {
   return createHash('sha1').update(`blob ${body.length}\0`).update(body).digest('hex');
 }
 function isCanonicalPath(path) {
-  return path === 'AGENTS.md' || path.startsWith('.agents/skills/') || path.startsWith('.claude/skills/');
+  return isManagedTargetPath(path);
 }
 function normalizePath(path) {
   if (typeof path !== 'string') return '';

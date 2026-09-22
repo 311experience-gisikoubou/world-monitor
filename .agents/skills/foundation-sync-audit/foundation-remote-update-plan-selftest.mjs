@@ -64,6 +64,26 @@ out = run({ ...base, targetBranch: 'refs/heads/chore/foundation-dev39-sync' });
 if (out.targetBranch !== 'chore/foundation-dev39-sync') throw new Error(JSON.stringify(out));
 out = run({ ...base, entries: [{ path: 'AGENTS.local.md', oldSha: sha('a'), newSha: blobSha(replaceContent), targetSha: sha('a'), newContent: replaceContent }] }, 2);
 if (out.code !== 'FOUNDATION_REMOTE_PLAN_PATH_OUTSIDE_SHARED_SURFACE') throw new Error(JSON.stringify(out));
+
+const layeredPaths = [
+  'CORE.md',
+  'OPERATIONS.md',
+  'PROJECT_COMPLETION.md',
+  'GEMINI.md',
+  '.claude/CLAUDE.md',
+  '.agents/rules/ai-foundation.md',
+  'roles/GEMINI.md',
+  'learnings/L-test.md',
+];
+out = run({
+  ...base,
+  entries: layeredPaths.map((path, index) => {
+    const content = `layered-${index}\n`;
+    return { path, oldSha: null, newSha: blobSha(content), targetSha: null, newContent: content };
+  }),
+});
+if (out.counts.created !== layeredPaths.length || out.counts.planned !== layeredPaths.length) throw new Error(JSON.stringify(out));
+
 out = run({ ...base, entries: [base.entries[0], base.entries[0]] }, 2);
 if (out.code !== 'FOUNDATION_REMOTE_PLAN_DUPLICATE_PATH') throw new Error(JSON.stringify(out));
 out = run({ ...base, targetHead: 'bad' }, 2);

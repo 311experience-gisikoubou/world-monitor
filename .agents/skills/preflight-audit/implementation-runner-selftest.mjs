@@ -37,7 +37,7 @@ fs.writeFileSync(testImplPath, implSource, 'utf8');
 const {
   validateImplementationTask, runClaudeImplementationTask, implementationRunnerEvidence,
   readBoundedTaskInput, verifyFeatureRepository, verifyWorktreeClean, verifyRepositoryIdentity,
-  readHeadSha, computeChangeSetSha256, validScopePattern, changedPathsWithinScope,
+  readHeadSha, computeChangeSetSha256, validScopePattern, changedPathsWithinScope, changedPathsInForbiddenScope,
 } = await import(pathToFileURL(testImplPath).href);
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
@@ -74,8 +74,11 @@ try {
   assert(validScopePattern('**/*.ts') === false, 'unsupported leading wildcard must be rejected');
   assert(validScopePattern('../escape') === false, 'path traversal must be rejected');
   assert(validateImplementationTask({ ...basePayload, allowedScope: ['src/*.ts'] }).includes('allowedScope_invalid'), 'unsupported wildcard must fail task validation, not silent glob interpretation');
+  assert(validateImplementationTask({ ...basePayload, forbiddenScope: ['src/*.ts'] }).includes('forbiddenScope_invalid'), 'unsupported forbidden wildcard must fail task validation');
+  assert(validateImplementationTask({ ...basePayload, forbiddenScope: ['docs/ui-reference/**', 'visual-test/thresholds.json'] }).length === 0, 'valid protected paths must be accepted');
   assert(changedPathsWithinScope(['src/widget.ts', 'src/nested/widget.ts'], ['src/**']) === true, 'directory-prefix scope must cover nested paths');
   assert(changedPathsWithinScope(['other/widget.ts'], ['src/**']) === false, 'out-of-scope path must not match');
+  assert(JSON.stringify(changedPathsInForbiddenScope(['src/widget.ts', 'docs/ui-reference/current/home.png'], ['docs/ui-reference/**'])) === JSON.stringify(['docs/ui-reference/current/home.png']), 'protected-path helper must isolate forbidden changes');
 
   const bounded = await readBoundedTaskInput((await import('node:stream')).Readable.from(['abc']), { maxBytes: 10, timeoutMs: 100 });
   assert(bounded === 'abc', 'bounded input must read valid stream');
@@ -184,6 +187,11 @@ process.stdin.on('end', () => {
     console.log(JSON.stringify({ type:'result', subtype:'success', is_error:false, result:'Edited an out-of-scope file' }));
     return;
   }
+  if (mode === 'forbidden') {
+    fs.writeFileSync('README.md', 'protected content changed\\n', 'utf8');
+    console.log(JSON.stringify({ type:'result', subtype:'success', is_error:false, result:'Edited a protected file' }));
+    return;
+  }
   if (forbiddenEnv().length) process.exit(9);
   // Really edits an existing tracked file AND creates a brand-new untracked
   // file, so the resulting change-set evidence must cover both a modified
@@ -256,6 +264,8 @@ process.stdin.on('end', () => {
   const records = fs.readFileSync(logPath, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
   const runRecord = records.find((r) => r.phase === 'run');
   assert(runRecord, 'expected a run record');
+  assert(runRecord.input.includes('provisional/development UI, old UI/screenshots, and AI memory are not visual authority'), 'Claude prompt must carry the approved-reference switch declaration');
+  assert(runRecord.input.includes(implPayload.prompt), 'guarded prompt must preserve the original implementation instruction');
   assert(path.resolve(runRecord.cwd) === path.resolve(repoDir), 'implementation run must execute with cwd=repoRoot for real edits');
   assert(runRecord.args.includes('--tools') && runRecord.args.includes('Read,Write,Edit,Glob,Grep'), 'bounded source-only tool set expected');
   assert(!runRecord.args.includes('Bash'), 'Bash must never be included in the tool boundary');
@@ -293,6 +303,13 @@ process.stdin.on('end', () => {
 
   const failed = runClaudeImplementationTask(implPayload, { desc: desc('fail'), envSource: cleanEnv, timeoutMs: 5000 });
   assert(failed.code === 'PROVIDER_STOPPED' && !JSON.stringify(failed).includes('SECRET_STDERR_SHOULD_NOT_LEAK'), 'stderr must not leak');
+  assert(verifyWorktreeClean(repoDir).ok === true, 'worktree must be clean again before the protected-scope test');
+
+  // --- protected-file edit STOP: even an allowed path cannot be changed when forbiddenScope protects it ---
+  const forbiddenStop = runClaudeImplementationTask({ ...implPayload, forbiddenScope: ['README.md'] }, { desc: desc('forbidden'), envSource: cleanEnv, timeoutMs: 5000 });
+  assert(forbiddenStop.result === 'STOP' && forbiddenStop.code === 'FORBIDDEN_SCOPE_VIOLATION', `protected edit must stop: ${JSON.stringify(forbiddenStop)}`);
+  assert(Array.isArray(forbiddenStop.forbiddenChangedPaths) && forbiddenStop.forbiddenChangedPaths.includes('README.md'), 'protected violation must name the changed protected path');
+  git(repoDir, ['checkout', '--', 'README.md']);
   assert(verifyWorktreeClean(repoDir).ok === true, 'worktree must be clean again before the scope-violation test');
 
   // --- out-of-scope edit STOP: enforced after Claude returns, before COMPLETED is reported ---

@@ -12,7 +12,7 @@ Verify that an application repository is actually using the intended `ai-dev-fou
 This closes three gaps:
 
 - a common rule is merged in the foundation while the copied `.agents/skills/` gate in an application remains older;
-- the canonical `.agents/skills/` copy is current, but a configured AI-native discovery adapter such as Claude Code's `.claude/skills/` wrapper is missing or stale, so the skill may not auto-trigger as intended;
+- canonical shared files are current but an AI-native entrypoint or configured discovery adapter is missing/stale, so the intended common rules may not reach that AI;
 - an already-adopted application requires a foundation version update and repeated manual file copying would otherwise risk overwriting repository-local changes or silently missing added/removed shared files.
 
 A version label, sync log entry, matching `AGENTS.md`, or matching canonical skill body alone is not proof of an effective current sync when a configured native adapter is stale.
@@ -34,37 +34,30 @@ Do not ask a non-engineer human to compare files, versions, SHAs, copied skill c
 
 ## Canonical Sync Surface
 
-The canonical mechanically compared shared surface is:
+Layered V1 is enabled when the Foundation contains `templates/AGENTS.index.md.template`. Its mechanically compared shared surface is:
 
-- `AGENTS.md`
-- every file that exists under foundation `.agents/skills/`
+- generated `AGENTS.md`;
+- `CORE.md` and `OPERATIONS.md`;
+- every file under `.agents/skills/`, `roles/`, and `learnings/`;
+- the managed native entrypoints `.claude/CLAUDE.md`, `GEMINI.md`, and `.agents/rules/ai-foundation.md`.
 
-Application-owned files outside those source paths are not part of this equality check. Target-only skills may exist; they are reported as extra but do not make the shared source copy stale by themselves. If a target file uses the same path as a foundation shared file, its content must match the foundation exactly.
+A pre-Layered Foundation remains a valid update baseline and uses the legacy `AGENTS.md + .agents/skills/` surface only. This compatibility exists so an already-adopted application can be upgraded safely from the exact old version; it does not weaken the Layered V1 target after adoption.
 
-`AGENTS.local.md`, application business specifications, application code, local commands/configuration, secrets, tokens, real data, and other repository-local material are not synchronized by this audit.
+`AGENTS.local.md`, `PROJECT_COMPLETION.md`, root `CLAUDE.md`, application business specifications, application code, local commands/configuration, secrets, tokens, real data, and other repository-local material are not synchronized. Target-only local content must not be overwritten merely to make Foundation sync pass.
 
-## AI-Native Adapter Surface
+## AI-Native Entrypoint Surface
 
-The foundation may also provide thin native-loader templates that point to the canonical `.agents/skills/<skill>/SKILL.md` files. These are adapters, not a second skill source of truth.
+`CORE.md` remains the single Tier 0 safety source. `entrypoint-renderer.mjs` deterministically renders or verifies the always-on native entry layer instead of maintaining duplicate safety text by hand.
 
-For Claude Code, the source adapter surface is:
+- **Codex:** root `AGENTS.md` is generated from the exact `CORE.md` body plus the small task index in `templates/AGENTS.index.md.template`. The renderer enforces a 16 KiB maximum, leaving material headroom below Codex's 32 KiB project-instruction default.
+- **Claude Code:** managed `.claude/CLAUDE.md` imports `../AGENTS.md` and `../AGENTS.local.md`. A repository-owned root `CLAUDE.md` is left untouched; verified Claude Code behavior loads both root and `.claude/CLAUDE.md`.
+- **Gemini:** managed `GEMINI.md` imports `./AGENTS.md` and `./AGENTS.local.md`.
+- **Antigravity:** managed `.agents/rules/ai-foundation.md` contains Tier 0 text generated from `CORE.md`, then points to `AGENTS.md` / `AGENTS.local.md` for task-specific detail. This uses Antigravity's native always-on `.agents/rules/**/*.md` surface.
+- **Claude native skills:** `templates/.claude/skills/<skill>/SKILL.md.template` remains a thin optional discovery wrapper around canonical `.agents/skills/<skill>/SKILL.md`.
 
-- `templates/.claude/skills/<skill>/SKILL.md.template`
+Run `entrypoint-renderer.mjs --root <foundation-root> --check` before claiming the source entrypoints current. It fails on generated drift, missing adapters/imports, or AGENTS size overflow.
 
-The audit first verifies the foundation source itself:
-
-- every canonical skill directory containing `SKILL.md` has a corresponding Claude wrapper template;
-- wrapper `name` and `description` match the canonical skill frontmatter;
-- the wrapper points to `../../../.agents/skills/<skill>/SKILL.md`;
-- a wrapper does not exist without a corresponding canonical skill.
-
-If the target repository is configured for Claude native skills — detected by an existing `.claude/skills/` directory or `CLAUDE.md` — every foundation wrapper template must exist at:
-
-- `.claude/skills/<skill>/SKILL.md`
-
-with content identical to the source template. Repository-local Claude skills may coexist and are reported as target-only extras rather than failures.
-
-If Claude integration is not configured in the target, the audit reports `FOUNDATION_CLAUDE_ADAPTER_NOT_CONFIGURED` and does not force adoption merely to obtain a PASS.
+For Claude native skill wrappers, the audit still verifies that each canonical skill has a matching wrapper template with the same `name` / `description` and canonical reference. If the target already uses Claude native skills — detected by root `CLAUDE.md` or `.claude/skills/` — wrappers are compared byte-for-byte; repository-local Claude skills may coexist as target-only extras.
 
 ## Machine Gate
 
@@ -90,11 +83,15 @@ Results include:
 - `INFO / FOUNDATION_CLAUDE_ADAPTER_NOT_CONFIGURED`: Claude native adapter is not configured in this repository.
 - `STOP` source/root/version errors: the comparison source cannot be trusted, so no current-sync claim is allowed.
 
-Machine-gate self-test:
+Machine-gate self-tests:
 
 ```text
+node .agents/skills/foundation-sync-audit/entrypoint-renderer-selftest.mjs
 node .agents/skills/foundation-sync-audit/foundation-sync-audit-selftest.mjs .agents/skills/foundation-sync-audit/foundation-sync-audit.mjs
+node .agents/skills/foundation-sync-audit/foundation-layered-sync-selftest.mjs
 ```
+
+The layered regression fixture proves a current Layered V1 target passes, a missing Gemini native entrypoint fails with `FOUNDATION_SYNC_MISSING`, and a tampered Antigravity always-on rule fails with `FOUNDATION_SYNC_STALE`.
 
 ## Safe Bootstrap
 
@@ -115,8 +112,9 @@ node .agents/skills/foundation-sync-audit/foundation-bootstrap.mjs --source-root
 The bootstrap gate is deliberately narrow and fail-closed:
 
 - it refuses `main` / `master`, detached HEAD, a non-root target checkout, and a dirty target working tree;
-- it copies only the canonical `AGENTS.md` + `.agents/skills/` surface;
+- for Layered V1 it copies the full managed surface: generated `AGENTS.md`, common detail docs/skills/roles/learnings, and the Claude/Gemini/Antigravity native entrypoints; legacy source baselines retain the old `AGENTS.md + .agents/skills/` behavior;
 - when the target already uses Claude native skills (`CLAUDE.md` or `.claude/skills/`), it also copies the foundation Claude wrapper templates to the matching `.claude/skills/<skill>/SKILL.md` paths;
+- it never overwrites the repository-owned root `CLAUDE.md`; the common Claude entry is `.claude/CLAUDE.md`;
 - it never creates, edits, or overwrites `AGENTS.local.md`, business specifications, application code, secrets, runtime data, or repository-local skills;
 - if a canonical/wrapper target path already exists with different content, it stops before changing anything instead of overwriting the target;
 - after copying, it automatically runs `foundation-sync-audit`; if that post-copy audit fails, files created by the bootstrap attempt are removed on a best-effort rollback;
@@ -171,7 +169,8 @@ The updater is deliberately fail-closed:
 - for a newly added canonical path, an absent target path may be created; an existing different file/directory is a collision and causes `STOP`;
 - when Claude native skills are configured, the same old-match/new-update rules apply to foundation wrapper templates;
 - target-only `.agents/skills/` and `.claude/skills/` entries remain untouched;
-- `AGENTS.local.md`, repository-local specifications, application code, secrets, runtime data, and any path outside the foundation surfaces are never part of the update plan;
+- Layered V1 additions such as `CORE.md`, common detail docs, `roles/`, `learnings/`, `.claude/CLAUDE.md`, `GEMINI.md`, and `.agents/rules/ai-foundation.md` use the same old-match/new-update/collision rules as the older managed paths;
+- `AGENTS.local.md`, root `CLAUDE.md`, repository-local specifications, application code, secrets, runtime data, and any path outside the foundation surfaces are never part of the update plan;
 - after applying the plan, the updater automatically runs `foundation-sync-audit` against the new source and then runs the targeted selftest for any changed Foundation family it knows how to verify; if the audit, targeted selftest, or an apply step fails, changed foundation files are restored on a best-effort rollback;
 - for `operation-preflight` changes, the updater invokes the committed `operation-preflight-selftest.mjs` with the exact updated gate path, so callers do not need to guess or reconstruct that verification command;
 - it creates no commit, push, PR, merge, network service, daemon, external dependency, or new permission.
@@ -199,13 +198,13 @@ The self-test covers dry-run/apply behavior, additions, replacements, removals, 
 If the synchronization or audit is performed through GitHub/remote-only tooling and the two local checkouts are not available, use equivalent machine-readable evidence:
 
 1. Fix the exact foundation source commit SHA and target application commit/PR head SHA.
-2. Enumerate foundation `AGENTS.md` and recursive `.agents/skills/` source files at that exact source SHA.
-3. Confirm each canonical source path exists at the target head and compare exact blob/content identity.
+2. Enumerate the exact managed surface for that source SHA. For Layered V1 this includes generated `AGENTS.md`, common detail docs/skills/roles/learnings, and the mapped Claude/Gemini/Antigravity entrypoint templates; for a legacy baseline use its legacy surface.
+3. Confirm each managed target path exists at the target head and compare exact blob/content identity.
 4. Enumerate `templates/.claude/skills/*/SKILL.md.template` and confirm that each template corresponds to a canonical skill with matching `name`, `description`, and canonical reference path.
-5. If the target has `.claude/skills/` or `CLAUDE.md`, compare every foundation Claude wrapper template to `.claude/skills/<skill>/SKILL.md` at the exact target head.
-6. Treat missing/different canonical files or configured native wrappers as `STOP`.
+5. If the target has `.claude/skills/` or root `CLAUDE.md`, compare every foundation Claude skill wrapper template to `.claude/skills/<skill>/SKILL.md` at the exact target head.
+6. Treat missing/different managed files, Layered V1 native entrypoints, or configured native wrappers as `STOP`.
 7. Record the source foundation `VERSION` and source commit SHA in the synchronization evidence/log.
-8. Do not treat a matching top-level `AGENTS.md`, a version string, or a sync-log statement as a substitute for file equality and configured-adapter equality.
+8. Do not treat a matching top-level `AGENTS.md`, a version string, or a sync-log statement as a substitute for managed-surface and adapter equality.
 
 For a remote-only version update, additionally fix the exact old foundation SHA and prove that every target path to be replaced/deleted matches the old source before writing the new blob. Newly introduced paths must be absent or already identical to the new source. If old-state identity cannot be proved, report `STOP` instead of overwriting.
 
@@ -221,7 +220,7 @@ Build a machine-readable manifest from the exact old Foundation source, exact ne
 node .agents/skills/foundation-sync-audit/foundation-remote-update-plan.mjs --manifest <manifest.json>
 ```
 
-The planner is read-only. It validates only Foundation-owned target paths (`AGENTS.md`, `.agents/skills/**`, and configured `.claude/skills/**`) and fails closed when:
+The planner is read-only. It validates only Foundation-managed target paths from the shared managed-surface contract: Layered V1 common files and native entrypoints, recursive `.agents/skills/**` / `roles/**` / `learnings/**`, plus configured `.claude/skills/**`. `AGENTS.local.md` and root `CLAUDE.md` remain outside this write surface. It fails closed when:
 
 - a replace/delete target no longer matches the trusted old blob SHA;
 - a newly introduced path collides with different target content;

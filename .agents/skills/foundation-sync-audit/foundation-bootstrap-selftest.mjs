@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 
@@ -37,6 +37,8 @@ async function seedSource() {
   await writeFile(join(source, '.agents', 'skills', 'README.md'), '# skills\n');
   await writeFile(join(source, '.agents', 'skills', 'foundation-sync-audit', 'SKILL.md'), canonical('foundation-sync-audit'));
   await copyFile(auditGate, join(source, '.agents', 'skills', 'foundation-sync-audit', 'foundation-sync-audit.mjs'));
+  await copyFile(join(dirname(auditGate), 'managed-surface.mjs'), join(source, '.agents', 'skills', 'foundation-sync-audit', 'managed-surface.mjs'));
+  await copyFile(join(dirname(auditGate), 'entrypoint-renderer.mjs'), join(source, '.agents', 'skills', 'foundation-sync-audit', 'entrypoint-renderer.mjs'));
   await writeFile(join(source, '.agents', 'skills', 'preflight-audit', 'SKILL.md'), canonical('preflight-audit'));
   await writeFile(join(source, 'templates', '.claude', 'skills', 'foundation-sync-audit', 'SKILL.md.template'), wrapper('foundation-sync-audit'));
   await writeFile(join(source, 'templates', '.claude', 'skills', 'preflight-audit', 'SKILL.md.template'), wrapper('preflight-audit'));

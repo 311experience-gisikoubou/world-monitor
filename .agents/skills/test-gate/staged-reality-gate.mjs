@@ -2,10 +2,11 @@
 import { createHash } from 'node:crypto';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { verifyStagedEvidence as verifyUiReproductionEvidence } from './ui-reference-reproduction-gate.mjs';
 
 const MAX_INPUT_BYTES = 64 * 1024;
 const PHASES = new Set(['EARLY_CHECK', 'MILESTONE_CHECK', 'FINAL_REALITY_CHECK']);
-const TASK_TYPES = new Set(['UI', 'BACKEND_API', 'DB_SCHEMA', 'CLI_SCRIPT', 'GENERATED_ARTIFACT', 'DOCS_CONFIG']);
+const TASK_TYPES = new Set(['UI', 'UI_REFERENCE_REPRODUCTION', 'BACKEND_API', 'DB_SCHEMA', 'CLI_SCRIPT', 'GENERATED_ARTIFACT', 'DOCS_CONFIG']);
 const AUTHORITY_STATES = new Set(['CURRENT']);
 const AUTHORITY_SOURCES = new Set(['CANONICAL_CONTRACT', 'HUMAN_DECISION_SYNC', 'REPO_LOCAL', 'ISSUE', 'EXPLICIT_HUMAN']);
 const EVIDENCE_SOURCES = new Set(['local', 'remote', 'github-api', 'connector', 'device', 'provider']);
@@ -13,12 +14,13 @@ const EVIDENCE_STATUSES = new Set(['PASS', 'FAIL', 'UNAVAILABLE']);
 const EVIDENCE_KINDS = new Set([
   'GIT_STATE', 'DIFF', 'SCREENSHOT', 'DOM', 'RUNTIME', 'TARGETED_TEST',
   'TEST_GATE_RESULT', 'API_RESPONSE', 'DB_SCHEMA', 'DB_STATE', 'CLI_OUTPUT',
-  'GENERATED_ARTIFACT', 'HASH', 'DOCUMENT_CONSISTENCY',
+  'GENERATED_ARTIFACT', 'HASH', 'DOCUMENT_CONSISTENCY', 'UI_MEASUREMENT', 'PROTECTED_FILES_CHECK',
 ]);
 const STATE_ID_RE = /^(?:git|remote):[0-9a-f]{40}$|^(?:worktree|artifact):[0-9a-f]{64}$/;
 
 const TASK_REQUIREMENTS = Object.freeze({
   UI: [['SCREENSHOT', 'DOM', 'RUNTIME']],
+  UI_REFERENCE_REPRODUCTION: [['SCREENSHOT', 'DOM', 'RUNTIME'], ['UI_MEASUREMENT'], ['PROTECTED_FILES_CHECK']],
   BACKEND_API: [['API_RESPONSE', 'RUNTIME', 'TARGETED_TEST']],
   DB_SCHEMA: [['DB_SCHEMA']],
   CLI_SCRIPT: [['CLI_OUTPUT', 'TARGETED_TEST']],
@@ -70,6 +72,7 @@ function normalizeEvidence(evidence) {
     source: item.source,
     reference: item.reference,
     stateId: item.stateId,
+    ...(['UI_MEASUREMENT', 'PROTECTED_FILES_CHECK'].includes(item.kind) && item.receipt?.receiptId ? { uiReproductionReceiptId: item.receipt.receiptId } : {}),
   }));
 }
 export function evaluate(input) {
@@ -111,6 +114,10 @@ export function evaluate(input) {
     if (item.status === 'FAIL') return stop('EVIDENCE_FAILURE', { kind: item.kind, reference: item.reference });
     if (item.status === 'PASS' && item.stateId !== input.stateId) {
       return stop('STALE_EVIDENCE', { kind: item.kind, expectedStateId: input.stateId, evidenceStateId: item.stateId });
+    }
+    if (['UI_MEASUREMENT', 'PROTECTED_FILES_CHECK'].includes(item.kind) && item.status === 'PASS') {
+      const uiReceipt = verifyUiReproductionEvidence(item.receipt, input.stateId);
+      if (!uiReceipt.ok) return stop('UI_REPRODUCTION_EVIDENCE_INVALID', { reason: uiReceipt.code, reference: item.reference });
     }
   }
 

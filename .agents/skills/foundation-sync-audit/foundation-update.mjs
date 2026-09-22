@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
+import { collectManagedSurface } from './managed-surface.mjs';
 
 const args = process.argv.slice(2);
 function argValue(name, fallback = '') {
@@ -74,12 +75,7 @@ async function readVersion(root, codePrefix) {
   return value || null;
 }
 async function collectCanonical(root) {
-  const result = new Map();
-  const agents = resolve(root, 'AGENTS.md');
-  if (await isFile(agents)) result.set('AGENTS.md', agents);
-  const skills = await collectFiles(resolve(root, '.agents', 'skills'), '.agents/skills');
-  for (const [path, file] of skills) result.set(path, file);
-  return result;
+  return collectManagedSurface(root);
 }
 async function collectWrappers(root) {
   const templates = await collectFiles(resolve(root, 'templates', '.claude', 'skills'), 'templates/.claude/skills');

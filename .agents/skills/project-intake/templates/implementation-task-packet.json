@@ -1,0 +1,30 @@
+{
+  "result": "PROCEED",
+  "code": "PROJECT_INTAKE_TASK_PACKET",
+  "schemaVersion": 1,
+  "intakeId": "example-intake",
+  "objective": "Approved objective from the project brief.",
+  "profile": "LIGHT",
+  "scope": "Approved semantic scope.",
+  "assumptions": [],
+  "safetyFacts": {
+    "protectedOrPatientData": false,
+    "externalCommunication": false,
+    "addedCostOrPaidUsage": false,
+    "authOrIdentity": false,
+    "productionImpact": false,
+    "realDataImpact": false
+  },
+  "approval": {
+    "decisionId": "project-intake-approval-example",
+    "humanDecisionFingerprint": "generated-by-project-intake-gate"
+  },
+  "downstreamGates": {
+    "preflightAudit": ".agents/skills/preflight-audit/SKILL.md",
+    "implementationRouting": ".agents/skills/preflight-audit/implementation-orchestrator.mjs",
+    "stagedReality": ".agents/skills/test-gate/staged-reality-gate.mjs",
+    "finalPrAudit": ".agents/skills/final-pr-audit/SKILL.md",
+    "humanDecisionSync": ".agents/skills/handoff/human-decision-sync.mjs"
+  },
+  "note": "This packet points to existing Foundation gates and does not replace them."
+}
