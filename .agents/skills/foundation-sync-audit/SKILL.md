@@ -15,7 +15,7 @@ This closes three gaps:
 - canonical shared files are current but an AI-native entrypoint or configured discovery adapter is missing/stale, so the intended common rules may not reach that AI;
 - an already-adopted application requires a foundation version update and repeated manual file copying would otherwise risk overwriting repository-local changes or silently missing added/removed shared files.
 
-A version label, sync log entry, matching `AGENTS.md`, or matching canonical skill body alone is not proof of an effective current sync when a configured native adapter is stale.
+A version label, sync log entry, matching `AGENTS.md`, or matching canonical skill body alone is not proof of an effective current sync when a configured native adapter is stale. `sync-log.md` is optional informational history only: a missing or stale log is not itself a synchronization failure, and humans must not be required to edit it to make a repository CURRENT. Exact managed-file/blob identity remains authoritative.
 
 ## Mandatory Trigger
 

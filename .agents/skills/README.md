@@ -14,7 +14,7 @@
 - **`preflight-audit`**：実装・修正・リファクタリング前のGit状態・仕様・既存コード・テストの確認と、想定外差分・仕様矛盾・データ損失リスク・追加費用リスクでの停止。
 - **`post-merge-verification`**：GitHub上でPRがマージされた後の、マージ方式（squash／merge commit／rebase merge）確認、tree一致確認、local `main`のfast-forward同期、branch削除の安全判断。
 - **`handoff`**：作業を別のチャット・別のAI・別のセッションへ引き継ぐためのProject Context固定と、通常ターンの短い暗黙継続が別Projectへ流れないためのturn-start整合確認。人間判断の正本はHuman Decision Syncに一本化し、local repository経路の`project-working-memory.mjs`はapproved reference・Current Goal・Next Stepの短期キャッシュとartifact recallだけを担当する。人間が採用したUI画像は`docs/ui-reference/`へproject-local正本として保存し、`ui-reference-manager.mjs`とCanonical Contract `REFERENCE_IMAGE`検証でCURRENT/archive・scope・source整合を強制する。focus内のdecision IDはcanonical confirmed decisionへ照合し、古い判断のローカルコピーを権威として再利用しない。
-- **`long-task-wait`**：長時間taskの待機・監視をPC内のbounded waitへ寄せ、AI↔RDCの短いstatus連打を避ける。turn wait budgetとstagnation checkpointを再利用し、同じstatus確認の反復を新しい待機機構で二重管理しない。
+- **`long-task-wait`**：長時間taskの待機・監視をPC内へ寄せ、AI↔RDCの短いstatus連打を避ける。既存task IDにはbounded waitを使い、長時間Claude実装は`claude-job/`の非同期worktreeジョブとして起動して短いread-only statusで追跡する。Claude実行自体は既存`implementation-orchestrator.mjs`へ委譲し、安全境界を二重化しない。
 
 ## 共通本体＋アプリ側設定（B分類・技術スタック固有部分を分離）
 

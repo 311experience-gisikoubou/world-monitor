@@ -63,6 +63,9 @@ for (const id of ['portfolio-governance','common-rule-health']) assert(portfolio
 const liveBase = select(['.agents/skills/preflight-audit/live-base-ref-guard.mjs']);
 assert(liveBase.selection === 'IMPACT_SCOPED', 'live-base guard change should be impact scoped');
 assert(liveBase.selectedTests.includes('live-base-ref'), 'live-base guard selftest missing');
+const workStart = select(['.agents/skills/preflight-audit/work-start-guard.mjs']);
+assert(workStart.selection === 'IMPACT_SCOPED', 'work-start guard change should be impact scoped');
+assert(workStart.selectedTests.includes('work-start'), 'work-start guard selftest missing');
 const actionsCost = select(['.agents/skills/preflight-audit/github-actions-cost-guard.mjs']);
 assert(actionsCost.selection === 'IMPACT_SCOPED', 'Actions cost guard change should be impact scoped');
 assert(actionsCost.selectedTests.includes('actions-cost'), 'Actions cost guard selftest missing');
@@ -140,7 +143,7 @@ assert(unknown.selection === 'FULL_SUITE', 'unknown governance path must use ful
 assert(unknown.reasons.includes('UNMAPPED_CHANGED_PATH_REQUIRES_FULL_SUITE'), 'unknown path reason missing');
 const highCoupling = select(['.agents/skills/preflight-audit/fast-path-classifier.mjs']);
 assert(highCoupling.selection === 'FULL_SUITE', 'fast-path classifier change must use full suite');
-assert(highCoupling.selectedTests.length === 35 && highCoupling.commands.length === 35, 'full suite must include all 35 selftests');
+assert(highCoupling.selectedTests.length === highCoupling.commands.length && highCoupling.selectedTests.includes('work-start'), 'full suite must include the complete current selftest set');
 assert(highCoupling.reasons.includes('HIGH_COUPLING_PATH_REQUIRES_FULL_SUITE'), 'high coupling reason missing');
 
 const docsOnly = select(['CHANGELOG.md','VERSION']);

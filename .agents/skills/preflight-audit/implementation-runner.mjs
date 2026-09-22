@@ -505,7 +505,7 @@ function parseArgs(argv) {
     if (argv[i] === '--pretty') pretty = true;
     else if (argv[i] === '--timeout-ms' && argv[i + 1]) {
       const parsed = Number(argv[++i]);
-      if (!Number.isInteger(parsed) || parsed < 1000 || parsed > 600000) return { valid: false };
+      if (!Number.isInteger(parsed) || parsed < 1000 || parsed > 21600000) return { valid: false };
       timeoutMs = parsed;
     } else return { valid: false };
   }

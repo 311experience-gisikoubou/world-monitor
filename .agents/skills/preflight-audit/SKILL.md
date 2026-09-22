@@ -18,6 +18,22 @@ description: Use before implementation, fixes, refactoring, UI/backend/design ch
 - Multi-step or long-running AI work must keep a non-engineer user oriented on current stage, meaning, next step, and whether user action is needed; do not make the user infer progress from technical logs.
 - Important rules must be classified as `DECLARATION_ONLY`, `OPERATIONAL`, or `TECHNICAL_ENFORCEMENT_REQUIRED`. Do not claim enforcement that does not exist.
 
+## Machine Work-Start Guard
+
+Before any local source-writing task, run `.agents/skills/preflight-audit/work-start-guard.mjs` from the exact repository root. It discovers the remote's default branch from `origin HEAD` rather than accepting a caller-selected base, then composes the existing Git/live-base/Foundation-entrypoint checks. It fails closed when the worktree is dirty, the current branch is protected, local tracking state is stale versus the live remote default branch, the feature branch is not derived from that live base, or the applicable `AGENTS.md`/Foundation surface is not current. For an application repository, pass `--foundation-root <current-foundation-root>` so `foundation-sync-audit` proves the managed surface. For the Foundation root, the guard verifies the generated entrypoint directly.
+
+```text
+node .agents/skills/preflight-audit/work-start-guard.mjs --repo-root . --mode write --foundation-root <foundation-root> --pretty
+```
+
+Read-only inspection/audit may use `--mode read-only`; dirty or stale state is then reported as warnings without modifying, resetting, stashing, or cleaning anything. A dirty workspace is evidence to inspect, never permission to discard it. Do not replace this guard with `reset`, `clean`, or an implicit freshening operation.
+
+Self-test:
+
+```text
+node .agents/skills/preflight-audit/work-start-guard-selftest.mjs
+```
+
 ## Approved Baseline Preservation
 
 Before implementation, migration, redesign, tool-to-tool transfer, UI recreation, specification rewrite, or any other work derived from a human-approved baseline:
@@ -303,6 +319,7 @@ node .agents/skills/preflight-audit/security-preflight.mjs --mode audit --data-m
 - Machine-gate output uses counts and generic safe metadata. It must not print matched contents or raw filenames/paths because filenames and directory names can themselves contain patient, clinic, customer, or other protected identifiers.
 - If raw-path inspection is needed to resolve a finding, keep it local-only and do not send the raw path to an external AI.
 - For a genuinely remote-only source change, absence of a local machine-gate run is not itself a reason to involve the human. Perform the equivalent remote repository/data/external-boundary checks below and mark any property that cannot be equivalently proven as unavailable/`UNKNOWN`.
+- The gate also reports (`INFO`, non-blocking) whether the repository root has a `.gitignore` and whether representative `env-secrets` and `db-runtime-data` probe paths are actually ignored according to Git's own `check-ignore` semantics, including later negation rules. This is a read-only diagnostic, not proof that every possible sensitive filename is covered. It never writes or overwrites a `.gitignore`; per-repository ignore rules remain repository-local and there is no shared/common `.gitignore` file.
 
 Machine-gate self-test:
 

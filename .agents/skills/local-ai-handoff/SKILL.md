@@ -132,7 +132,8 @@ Like `detect-codex.ps1` and `validate-handoff-message.ps1`, this script does not
 1. Copy `templates/.ai-handoff/README.md.template` into the target repository as `.ai-handoff/README.md`.
 2. Create `.ai-handoff/runtime/{outbox,inbox,processed}/` in that repository.
 3. Decide, in that repository's `AGENTS.local.md`, whether `.ai-handoff/runtime/` is git-tracked or excluded via `.gitignore`, and record the decision there. This skill does not decide it for the repository.
-4. Record the adoption in that repository's `.agents/sync-log.md`, consistent with how other common skills are synced.
+
+A repository may optionally note the adoption in `.agents/sync-log.md` as informational history for humans. This is never required: exact file/blob identity checked by `foundation-sync-audit` remains the sole authority for whether adoption is current, and a missing, stale, or never-created `sync-log.md` is not a synchronization failure. Do not add or restore a manual sync-log maintenance step.
 
 ## Application-Specific Configuration
 

@@ -16,6 +16,7 @@ const identity = {
   executionSurfaceObserved: 'feature/issue',
 };
 const authority = { state: 'CURRENT', source: 'CANONICAL_CONTRACT', reference: 'PROJECT_CONTEXT.json#current-target' };
+const actors = { implementerId: 'claude-implementation-write', judgeId: 'chatgpt-final-review' };
 const ev = (kind, stateId = S, status = 'PASS') => ({ kind, status, source: 'local', reference: 'selftest:' + kind, stateId });
 function uiReceipt(stateId = G, phase = 'FINAL_REALITY_CHECK') {
   const core = {
@@ -40,7 +41,7 @@ const uiEv = (kind, stateId = G, receipt = uiReceipt(stateId)) => ({
 });
 
 function input(phase, taskTypes, evidence, checkpoint, stateId = S) {
-  return { schemaVersion: 1, phase, taskTypes, stateId, identity, authority, checkpoint, evidence };
+  return { schemaVersion: 2, phase, taskTypes, stateId, identity, authority, actors, checkpoint, evidence };
 }
 
 let result = evaluate(input(
@@ -51,6 +52,7 @@ let result = evaluate(input(
 assert.equal(result.result, 'PASS');
 assert.equal(result.code, 'EARLY_CHECK_PASS');
 assert.match(result.receiptId, /^[0-9a-f]{64}$/);
+assert.deepEqual(result.actors, actors);
 
 result = evaluate({
   ...input('EARLY_CHECK', ['UI'], [ev('GIT_STATE'), ev('DIFF'), ev('DOM')], { scopeMatch: true, firstSliceObserved: true }),
@@ -63,6 +65,16 @@ result = evaluate({
   authority: { state: 'SUPERSEDED', source: 'REPO_LOCAL', reference: 'old-spec' },
 });
 assert.equal(result.code, 'AUTHORITY_NOT_CURRENT');
+
+result = evaluate({
+  ...input('EARLY_CHECK', ['CLI_SCRIPT'], [ev('GIT_STATE'), ev('DIFF'), ev('CLI_OUTPUT')], { scopeMatch: true, firstSliceObserved: true }),
+  actors: { implementerId: 'same-agent', judgeId: 'same-agent' },
+});
+assert.equal(result.code, 'ACTOR_RECORD_SEPARATION_REQUIRED');
+
+result = evaluate({ ...input('EARLY_CHECK', ['UI'], [ev('GIT_STATE'), ev('DIFF'), ev('DOM')], { scopeMatch: true, firstSliceObserved: true }), schemaVersion: 1 });
+assert.equal(result.code, 'SCHEMA_VERSION_UPGRADE_REQUIRED');
+assert.equal(result.schemaVersion, 2);
 
 result = evaluate(input(
   'EARLY_CHECK', ['UI'],
@@ -151,6 +163,37 @@ result = evaluate(input(
 ));
 assert.equal(result.result, 'PASS');
 assert(!result.requiredEvidence.some(x => x.includes('SCREENSHOT')));
+
+result = evaluate(input(
+  'EARLY_CHECK', ['FOUNDATION_GOVERNANCE'],
+  [ev('GIT_STATE'), ev('DIFF'), ev('DOCUMENT_CONSISTENCY')],
+  { scopeMatch: true, firstSliceObserved: true },
+));
+assert.equal(result.result, 'PASS');
+assert(!result.requiredEvidence.includes('TARGETED_TEST'));
+
+result = evaluate(input(
+  'MILESTONE_CHECK', ['FOUNDATION_GOVERNANCE'],
+  [ev('GIT_STATE'), ev('DIFF'), ev('DOCUMENT_CONSISTENCY')],
+  { scopeMatch: true, milestoneObserved: true, structureMatch: true },
+));
+assert.equal(result.code, 'REQUIRED_EVIDENCE_MISSING');
+assert(result.missingEvidence.includes('TARGETED_TEST'));
+
+result = evaluate(input(
+  'MILESTONE_CHECK', ['FOUNDATION_GOVERNANCE'],
+  [ev('GIT_STATE'), ev('DIFF'), ev('DOCUMENT_CONSISTENCY'), ev('TARGETED_TEST')],
+  { scopeMatch: true, milestoneObserved: true, structureMatch: true },
+));
+assert.equal(result.result, 'PASS');
+
+result = evaluate(input(
+  'FINAL_REALITY_CHECK', ['FOUNDATION_GOVERNANCE'],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('DOCUMENT_CONSISTENCY'), finalEv('TARGETED_TEST'), finalEv('TEST_GATE_RESULT')],
+  { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
+  G,
+));
+assert.equal(result.result, 'PASS');
 
 result = evaluate(input(
   'MILESTONE_CHECK', ['CLI_SCRIPT', 'DOCS_CONFIG'],

@@ -6,7 +6,7 @@ import { verifyStagedEvidence as verifyUiReproductionEvidence } from './ui-refer
 
 const MAX_INPUT_BYTES = 64 * 1024;
 const PHASES = new Set(['EARLY_CHECK', 'MILESTONE_CHECK', 'FINAL_REALITY_CHECK']);
-const TASK_TYPES = new Set(['UI', 'UI_REFERENCE_REPRODUCTION', 'BACKEND_API', 'DB_SCHEMA', 'CLI_SCRIPT', 'GENERATED_ARTIFACT', 'DOCS_CONFIG']);
+const TASK_TYPES = new Set(['UI', 'UI_REFERENCE_REPRODUCTION', 'BACKEND_API', 'DB_SCHEMA', 'CLI_SCRIPT', 'GENERATED_ARTIFACT', 'DOCS_CONFIG', 'FOUNDATION_GOVERNANCE']);
 const AUTHORITY_STATES = new Set(['CURRENT']);
 const AUTHORITY_SOURCES = new Set(['CANONICAL_CONTRACT', 'HUMAN_DECISION_SYNC', 'REPO_LOCAL', 'ISSUE', 'EXPLICIT_HUMAN']);
 const EVIDENCE_SOURCES = new Set(['local', 'remote', 'github-api', 'connector', 'device', 'provider']);
@@ -33,7 +33,7 @@ function bounded(value, max = 1000) {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 }
 function stop(code, extra = {}) {
-  return { schemaVersion: 1, result: 'STOP', code, ...extra };
+  return { schemaVersion: 2, result: 'STOP', code, ...extra };
 }
 function identityMismatch(identity) {
   const pairs = [
@@ -58,7 +58,11 @@ function checkpointRequirements(phase) {
 function evidenceRequirements(taskTypes, phase) {
   const groups = [['GIT_STATE'], ['DIFF']];
   for (const taskType of taskTypes) {
-    for (const group of TASK_REQUIREMENTS[taskType]) groups.push(group);
+    for (const group of TASK_REQUIREMENTS[taskType] ?? []) groups.push(group);
+  }
+  if (taskTypes.includes('FOUNDATION_GOVERNANCE')) {
+    groups.push(['DOCUMENT_CONSISTENCY']);
+    if (phase !== 'EARLY_CHECK') groups.push(['TARGETED_TEST']);
   }
   if (taskTypes.includes('GENERATED_ARTIFACT') && phase === 'FINAL_REALITY_CHECK') groups.push(['HASH']);
   if (taskTypes.includes('DB_SCHEMA') && phase === 'FINAL_REALITY_CHECK') groups.push(['DB_STATE', 'RUNTIME']);
@@ -77,7 +81,7 @@ function normalizeEvidence(evidence) {
 }
 export function evaluate(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return stop('INPUT_INVALID');
-  if (input.schemaVersion !== 1) return stop('SCHEMA_VERSION_INVALID');
+  if (input.schemaVersion !== 2) return stop(input.schemaVersion === 1 ? 'SCHEMA_VERSION_UPGRADE_REQUIRED' : 'SCHEMA_VERSION_INVALID');
   if (!PHASES.has(input.phase)) return stop('PHASE_INVALID');
   if (!STATE_ID_RE.test(input.stateId || '')) return stop('STATE_ID_INVALID');
   if (!Array.isArray(input.taskTypes) || input.taskTypes.length === 0 || input.taskTypes.length > TASK_TYPES.size ||
@@ -92,6 +96,15 @@ export function evaluate(input) {
   if (!authority || typeof authority !== 'object' || !AUTHORITY_STATES.has(authority.state) ||
       !AUTHORITY_SOURCES.has(authority.source) || !bounded(authority.reference, 1000)) {
     return stop('AUTHORITY_NOT_CURRENT');
+  }
+
+  const actors = input.actors;
+  if (!actors || typeof actors !== 'object' || Array.isArray(actors) ||
+      !bounded(actors.implementerId, 120) || !bounded(actors.judgeId, 120)) {
+    return stop('ACTORS_INVALID');
+  }
+  if (actors.implementerId.trim() === actors.judgeId.trim()) {
+    return stop('ACTOR_RECORD_SEPARATION_REQUIRED');
   }
 
   const requiredCheckpoint = checkpointRequirements(input.phase);
@@ -129,14 +142,15 @@ export function evaluate(input) {
   if (missingEvidence.length > 0) return stop('REQUIRED_EVIDENCE_MISSING', { missingEvidence });
 
   const receiptBase = {
-    schemaVersion: 1,
-    receiptType: 'STAGED_REALITY_RECEIPT_V1',
+    schemaVersion: 2,
+    receiptType: 'STAGED_REALITY_RECEIPT_V2',
     result: 'PASS',
     code: input.phase + '_PASS',
     phase: input.phase,
     stateId: input.stateId,
     taskTypes: [...input.taskTypes].sort(),
     authority: { state: authority.state, source: authority.source, reference: authority.reference },
+    actors: { implementerId: actors.implementerId.trim(), judgeId: actors.judgeId.trim() },
     identity: { ...input.identity },
     checkpoint: Object.fromEntries(requiredCheckpoint.map(key => [key, true])),
     evidence: normalizeEvidence(input.evidence),
