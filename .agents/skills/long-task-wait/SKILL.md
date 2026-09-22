@@ -1,6 +1,6 @@
 ---
 name: long-task-wait
-description: Use for local long-running tasks that expose a stable task ID and read-only status function. Replace repeated short-interval status polling with a bounded local wait while preserving fail-closed task identity, timeout recovery, and no-duplicate-start rules.
+description: Use for local long-running tasks and long-running Claude implementation jobs. Prefer asynchronous job launch plus read-only status for Claude work, and bounded local waits for existing stable task IDs, while preserving fail-closed identity, timeout recovery, and no-duplicate-start rules.
 ---
 
 # Long Task Wait
@@ -81,6 +81,21 @@ If PID reuse is a realistic ambiguity, the runner must bind process identity to 
 State files must continue to use atomic replacement such as temporary-file write followed by rename. The bounded wait helper is read-only and does not own task state persistence.
 
 The helper uses Node built-ins only. Do not add a dependency, external network path, cloud service, external AI transmission, production data access, patient data access, sales data access, elevated privilege, Windows Service, daemon, named pipe, WebSocket, broker, queue, scheduler, or push notification mechanism for this purpose.
+
+## Long-running Claude implementation jobs
+
+For Claude implementation work that can outlive the outer Remote Desktop Commander/tool wait, use the PowerShell transport under `claude-job/` instead of increasing the outer wait or repeatedly polling the raw CLI.
+
+- `run-claude-job.ps1` creates an isolated job worktree/branch and stays as the tracked worker process; a process manager such as Remote Desktop Commander returns control after initial output and later observes that same PID.
+- Model execution remains delegated to the existing `preflight-audit/implementation-orchestrator.mjs`; do not add a second raw-Claude route.
+- `check-claude-job.ps1` is read-only. `LONG_RUNNING` is a warning only; it never authorizes an automatic kill.
+- Job logs live under ignored `.ai-jobs/`. Do not place protected real data, credentials, patient/clinic/billing data, or secrets in prompts/logs.
+- One repository has at most one active Claude job. A continuation reuses the same job worktree and checkpoints only already in-scope changes with a normal commit; out-of-scope changes stop continuation.
+- `DONE` is created only by the outer runner after the existing orchestrator, scope gate, and the supplied job-local test command pass. Claude prose is never completion evidence.
+- `READY_FOR_REVIEW` returns to the normal Foundation staged-reality/test-gate/final-PR flow; it is not merge authorization.
+- The provider process has a separate hard timeout ceiling of 360 minutes. The default 60-minute `LONG_RUNNING` threshold remains warning-only.
+
+See `claude-job/README.md` for the Windows entrypoints.
 
 ## Timeout recovery interaction
 

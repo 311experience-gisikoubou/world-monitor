@@ -28,6 +28,28 @@ try {
   dir = repo();
   let r = run(dir);
   if (r.status !== 0 || !r.stdout.includes('PROCEED')) throw new Error(`safe repo should proceed: ${r.stdout} ${r.stderr}`);
+  if (!r.stdout.includes('GITIGNORE_MISSING')) throw new Error('missing .gitignore should be reported as INFO');
+  if (!r.stdout.includes('"INFO"')) throw new Error('gitignore report should use INFO status');
+
+  writeFileSync(join(dir, '.gitignore'), '.env\nsecrets/\ncredentials/\n*.key\nlogs/\ntmp/\n*.db\n*.sqlite*\n');
+  r = run(dir);
+  if (r.status !== 0 || !r.stdout.includes('PROCEED')) throw new Error('repo with covering .gitignore should still proceed');
+  if (r.stdout.includes('GITIGNORE_MISSING') || r.stdout.includes('GITIGNORE_CATEGORY_MISSING')) {
+    throw new Error('covering .gitignore should not report missing categories');
+  }
+
+  writeFileSync(join(dir, '.gitignore'), '.env\n!.env\nsecrets/\ncredentials/\n*.key\nlogs/\ntmp/\n*.db\n*.sqlite*\n');
+  r = run(dir);
+  if (r.status !== 0 || !r.stdout.includes('PROCEED')) throw new Error('negated .gitignore report must stay non-blocking');
+  if (!r.stdout.includes('GITIGNORE_CATEGORY_MISSING') || !r.stdout.includes('env-secrets')) {
+    throw new Error('negated .env must not be reported as covered');
+  }
+
+  writeFileSync(join(dir, '.gitignore'), 'node_modules/\n');
+  r = run(dir);
+  if (r.status !== 0 || !r.stdout.includes('PROCEED')) throw new Error('non-covering .gitignore report must stay non-blocking');
+  if (!r.stdout.includes('GITIGNORE_CATEGORY_MISSING')) throw new Error('non-covering .gitignore should report missing categories');
+  rmSync(join(dir, '.gitignore'));
 
   const syntheticSensitiveName = 'SYNTHETIC_PERSON_IDENTIFIER_123.pdf';
   writeFileSync(join(dir, syntheticSensitiveName), 'synthetic-content-not-for-output\n');

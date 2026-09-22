@@ -65,10 +65,12 @@ if (out.targetBranch !== 'chore/foundation-dev39-sync') throw new Error(JSON.str
 out = run({ ...base, entries: [{ path: 'AGENTS.local.md', oldSha: sha('a'), newSha: blobSha(replaceContent), targetSha: sha('a'), newContent: replaceContent }] }, 2);
 if (out.code !== 'FOUNDATION_REMOTE_PLAN_PATH_OUTSIDE_SHARED_SURFACE') throw new Error(JSON.stringify(out));
 
+out = run({ ...base, entries: [{ path: 'PROJECT_COMPLETION.md', oldSha: null, newSha: blobSha(createContent), targetSha: null, newContent: createContent }] }, 2);
+if (out.code !== 'FOUNDATION_REMOTE_PLAN_PATH_OUTSIDE_SHARED_SURFACE') throw new Error(JSON.stringify(out));
+
 const layeredPaths = [
   'CORE.md',
   'OPERATIONS.md',
-  'PROJECT_COMPLETION.md',
   'GEMINI.md',
   '.claude/CLAUDE.md',
   '.agents/rules/ai-foundation.md',

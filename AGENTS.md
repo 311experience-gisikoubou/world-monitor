@@ -32,6 +32,7 @@
 - repositoryがpublicの場合は、機密データ混入防止と履歴監査が完了するまで実データ・実データ由来ファイルを扱わない。
 - 必要最小限の権限で作業する。
 - 有料サービスや自動課金につながる仕組みを無断で導入しない。
+- 月額・定額・無料枠など承認済みの included-cost 経路が利用上限に達しても、API key経路・従量課金・paid overage・クレジット購入/自動top-up等の追加費用経路へ自動で切り替えない。追加費用のない承認済み経路へ安全に切り替えられない場合は停止または待機し、追加費用が必要なら人間の明示承認を得る。
 
 ## 詳細への入口
 
@@ -64,7 +65,7 @@ Tier 0 安全原則は上の CORE セクションを常時適用し、詳細ル�
 | 新規project・意味ある新機能の着手 | `.agents/skills/project-intake/`、`OPERATIONS.md`、Human Decision Sync |
 | 実装・bugfix・refactor・Git/PR | `OPERATIONS.md`、`.agents/skills/preflight-audit/`、`test-gate/`、`final-pr-audit/` |
 | UI正本の忠実再現 (`UI_REFERENCE_REPRODUCTION`) | `.agents/skills/handoff/`、`test-gate/`、CURRENT Canonical Contract |
-| projectの完成条件・残件整理 | `PROJECT_COMPLETION.md` |
+| projectの完成条件・残件整理 | `PROJECT_COMPLETION.md`が存在すればそれを使用。無ければ repository の現在の完成条件正本（`CURRENT_STATUS.md` / `PROJECT_CONTEXT.json` / 現行 Canonical Contract 等）を使用 |
 | 共通ルール・共通skill変更 | `OPERATIONS.md`、`learnings/L-0003.md`、`common-rule-integration-audit/` |
 | AI実行者・役割選定 | `OPERATIONS.md`、`roles/`、`learnings/L-0006.md` |
 | migration / DB変更 | `migration-safety/` と repository 固有ルール |
@@ -75,7 +76,7 @@ Tier 0 安全原則は上の CORE セクションを常時適用し、詳細ル�
 ### 必須の共通運用
 
 - Project Intake（新規project・意味ある新機能の入口）: 実装前に`project-intake`で目的・scope・assumption・未解決の人間判断をbrief化する。未解決質問0件かつ対応するHuman Decision Syncが`CONFIRMED / EXPLICIT_HUMAN`になった後だけ既存開発workflowへ進む。
-- 変更前に `preflight-audit` を通し、正本・project identity・安全境界・作業所有権を確認する。
+- 変更前に `preflight-audit` を通し、正本・project identity・安全境界・作業所有権を確認する。local source writeの開始時は `work-start-guard.mjs --mode write` で、clean worktree・live default branch・branch base・AGENTS/Foundation currentnessを機械確認する。読み取り専用監査は `--mode read-only` でdirty状態を破壊せず観測できる。
 - `STAGED_REALITY_GATE_REQUIRED=YES`。実装は EARLY / MILESTONE / FINAL REALITY の該当checkを飛ばさない。`UI_REFERENCE_REPRODUCTION`ではstate-bound `UI_MEASUREMENT`と`PROTECTED_FILES_CHECK`を必須とし、同じcheck IDが3回連続で実測FAILならSTOPする。
 - 人間承認済みUI画像の再現では、reference/version・overlay確認済み寸法・許容値・inspection script・表示条件・synthetic dummy data・overlay proofを実装AIの変更対象から保護する。DOM/CSS実測を主判定とし、screenshot/overlay/pixel diffは補助証拠とする。詳細は`handoff/`と`test-gate/`を正本とする。
 - 長時間・複数段階作業の終了前は `stagnation-watch.mjs --response-intent terminate` の terminal state に従う。

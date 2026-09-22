@@ -6,7 +6,7 @@ import { parseInput, validateEvidence } from './fast-path-classifier.mjs';
 const CORE = ['merge-authorization','merge-execution','fast-path','security-preflight','full-gate-selector'];
 const ALL = [
   'merge-authorization','merge-execution','merge-execution-batch','merge-executor','foundation-sync','foundation-bootstrap','foundation-update','foundation-remote-plan','foundation-batch-rollout',
-  'project-context','project-memory','common-rule-health','portfolio-governance','live-base-ref','ai-capacity','ai-provider-inventory','ai-task-router','claude-runner','fast-path','operation-preflight','actions-cost',
+  'project-context','project-memory','common-rule-health','portfolio-governance','live-base-ref','work-start','ai-capacity','ai-provider-inventory','ai-task-router','claude-runner','fast-path','operation-preflight','actions-cost',
   'provider-qualification','provider-readiness','security-history','security-preflight','stagnation','wip-observer','portfolio-health','long-task-wait','merge-readiness','real-device',
   'implementation-runner','implementation-route-receipt','implementation-orchestrator',
   'full-gate-selector',
@@ -26,6 +26,7 @@ const COMMANDS = {
   'common-rule-health':['node','.agents/skills/common-rule-integration-audit/common-rule-health-audit-selftest.mjs','.agents/skills/common-rule-integration-audit/common-rule-health-audit.mjs'],
   'portfolio-governance':['node','tools/portfolio-governance-audit-selftest.mjs'],
   'live-base-ref':['node','.agents/skills/preflight-audit/live-base-ref-guard-selftest.mjs','.agents/skills/preflight-audit/live-base-ref-guard.mjs'],
+  'work-start':['node','.agents/skills/preflight-audit/work-start-guard-selftest.mjs'],
   'ai-capacity':['node','.agents/skills/preflight-audit/ai-capacity-observer-selftest.mjs','.agents/skills/preflight-audit/ai-capacity-observer.mjs'],
   'ai-provider-inventory':['node','.agents/skills/preflight-audit/ai-provider-inventory-selftest.mjs','.agents/skills/preflight-audit/ai-provider-inventory.mjs','.agents/skills/preflight-audit/ai-task-router.mjs'],
   'ai-task-router':['node','.agents/skills/preflight-audit/ai-task-router-selftest.mjs','.agents/skills/preflight-audit/ai-task-router.mjs'],
@@ -57,6 +58,7 @@ const GROUPS = {
   'common-rule-health':['common-rule-health'],
   'portfolio-governance':['portfolio-governance','common-rule-health'],
   'live-base-ref':['live-base-ref'],
+  'work-start':['work-start'],
   'security-history':['security-history'],
   'security-preflight':['security-preflight'],
   'wip-observer':['wip-observer'],
@@ -95,6 +97,7 @@ function familyFor(path) {
   if (pair(path,'.agents/skills/common-rule-integration-audit','common-rule-health-audit')) return 'common-rule-health';
   if (path === 'tools/portfolio-governance-audit.mjs' || path === 'tools/portfolio-governance-audit-selftest.mjs') return 'portfolio-governance';
   if (pair(path,pre,'live-base-ref-guard')) return 'live-base-ref';
+  if (pair(path,pre,'work-start-guard')) return 'work-start';
   if (pair(path,pre,'security-history-audit')) return 'security-history';
   if (pair(path,pre,'security-preflight')) return 'security-preflight';
   if (pair(path,pre,'wip-review-queue-observer')) return 'wip-observer';

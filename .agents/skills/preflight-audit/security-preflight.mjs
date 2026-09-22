@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import process from 'node:process';
 
 const args = process.argv.slice(2);
@@ -118,6 +120,27 @@ if (externalFiles.size) {
     fileCount: externalFiles.size,
     markerCount,
   });
+}
+
+// Read-only .gitignore category coverage check. Reports gaps; never writes a .gitignore.
+const gitignorePath = join(root, '.gitignore');
+if (!existsSync(gitignorePath)) {
+  add('INFO', 'GITIGNORE_MISSING');
+} else {
+  function ignoredByGit(path) {
+    try {
+      execFileSync('git', ['check-ignore', '--no-index', '-q', '--', path], { stdio: 'ignore' });
+      return true;
+    } catch { return false; }
+  }
+  const ignoreCategories = [
+    { id: 'env-secrets', probes: ['.env', 'secrets/probe.txt', 'credentials/probe.txt', 'probe.key'] },
+    { id: 'db-runtime-data', probes: ['probe.db', 'probe.sqlite3', 'logs/probe.log', 'tmp/probe.tmp'] },
+  ];
+  const missingCategories = ignoreCategories
+    .filter((cat) => !cat.probes.every(ignoredByGit))
+    .map((cat) => cat.id);
+  if (missingCategories.length) add('INFO', 'GITIGNORE_CATEGORY_MISSING', { categories: missingCategories });
 }
 
 // GitHub visibility. Read-only check; never changes GitHub state.

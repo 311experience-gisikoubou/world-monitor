@@ -16,6 +16,7 @@
 - 各repositoryの`AGENTS.local.md`にあるAI役割記述は既定値・repository固有制約として必ず確認する。単なる過去の担当や通常経路は永久固定の割り当てとは扱わないが、安全・権限・責任・費用・データ取扱い・human approvalの明示境界は上書きしない（`roles/`、`learnings/L-0006.md`参照）。
 - AIだけで安全に決められる実行者・経路の技術選択を、非エンジニアの人間へ返さない。通常経路が利用不能なら、承認済みの安全境界内で別の利用可能な経路をAIが評価する。
 - 現行のsource実装では、qualificationを満たす間はClaude CLIの`claude-implementation-write`を第一実装経路とし、ChatGPTは仕様整理・設計・オーケストレーション・最終監査を既定担当とする。Codexのwrite経路は別途qualificationするまで実装フォールバックとして扱わず、Gemini/Antigravityは別途qualificationされるまでは独立レビュー・代替分析を主用途とする。ChatGPTによる直接source実装は閉じた例外理由がある場合だけとし、通常経路にはしない（`learnings/L-0006.md`参照）。
+- For Claude implementation that may outlive the outer tool wait, use `long-task-wait/claude-job`: launch and status are short calls, model execution stays inside the existing `implementation-orchestrator.mjs`, 60 minutes is warning-only, one repository has one active job, out-of-scope changes fail closed, and only the outer runner may create DONE.
 
 ## Simplest Safe Design
 
@@ -89,7 +90,8 @@
 複数のapplication repositoryで共通利用する標準開発ルーティンは以下とする。
 
 ```
-Context / Authority Check
+Work-Start Guard（local source writeのみ）
+→ Context / Authority Check
 → preflight-audit
 → feature branch
 → Implementation Step 1
@@ -112,6 +114,7 @@ Context / Authority Check
 
 The staged checks are executed through `.agents/skills/test-gate/staged-reality-gate.mjs`. They fail closed on target/authority/state/evidence mismatch, use task-type-specific objective evidence, and reuse valid evidence rather than repeating the same test. If a later edit changes the bound state, rerun only the invalidated staged check before continuing.
 
+- local source writeを始める前に `work-start-guard.mjs --mode write` を通し、clean worktree・live target branch・feature branchの派生元・AGENTS/Foundation currentnessを確認する。dirty/staleな既存worktreeを見つけても自動reset/clean/stashせず、読み取り専用で差分を保護したまま確認する。
 - `main`へ直接commitしない。原則として1目的1feature branch / 1 PRとする。
 - feature branchやIssue/PRを新規作成する前に、preflightで作業所有権を確認する。最低限、(1)現在のrepository / 共通基盤のscopeか、(2)専用application projectや別workstreamが正本として既に進行していないか、(3)同じIssue / PR / 実装を二重に作らないか、の3点を`CURRENT_STATUS.md`・Issue・PR・branch・仕様等の取得可能な証拠で確認する。
 - 同じ製品タスクを専用project / repositoryが既に所有している場合、そのworkstreamの状態を別projectから更新・再実装しない。共通基盤側では再発防止や横断運用の観測材料としてのみ使い、別のFoundation-owned taskへ進む。所有権の移管は、明示的な移管・完了・再開根拠がある場合だけ行う。

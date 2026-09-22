@@ -26,6 +26,9 @@ assert.equal(agentsA, agentsB);
 assert.equal(agentsA.includes('never weaken safety'), true);
 assert.equal(Buffer.byteLength(agentsA, 'utf8') < AGENTS_MAX_BYTES, true);
 assert.equal(renderAntigravity(core).includes('no secrets'), true);
+const repositoryIndex = await readFile(new URL('../../../templates/AGENTS.index.md.template', import.meta.url), 'utf8');
+assert.equal(repositoryIndex.includes('`PROJECT_COMPLETION.md`が存在すれば'), true);
+assert.equal(repositoryIndex.includes('work-start-guard.mjs --mode write'), true);
 
 const root = await mkdtemp(join(tmpdir(), 'foundation-entrypoints-'));
 try {

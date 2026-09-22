@@ -34,7 +34,7 @@ Run the shared evaluator at each applicable checkpoint:
 <checkpoint-json> | node .agents/skills/test-gate/staged-reality-gate.mjs
 ```
 
-Use `phase` = `EARLY_CHECK`, `MILESTONE_CHECK`, or `FINAL_REALITY_CHECK`. Bind every PASS item to the same machine-observed `stateId` (committed/remote Git SHA or deterministic worktree/artifact hash). The gate always requires Git-state and diff evidence, exact repository/project/target/execution-surface identity, and CURRENT authority.
+Use `schemaVersion: 2` with `phase` = `EARLY_CHECK`, `MILESTONE_CHECK`, or `FINAL_REALITY_CHECK`; legacy schema v1 inputs fail explicitly with `SCHEMA_VERSION_UPGRADE_REQUIRED` rather than being silently reinterpreted. Bind every PASS item to the same machine-observed `stateId` (committed/remote Git SHA or deterministic worktree/artifact hash). The gate requires Git-state and diff evidence, exact repository/project/target/execution-surface identity, CURRENT authority, and declared `actors.implementerId` / `actors.judgeId`; equal actor records fail with `ACTOR_RECORD_SEPARATION_REQUIRED`. These fields are tamper-evidently recorded in the receipt but are not authenticated provider identity and do not, by themselves, prove that an independent review actually ran. When `learnings/L-0005.md` requires independent review, retain separate provider/tool execution evidence in addition to this staged receipt.
 
 Reality evidence is task-aware rather than UI-centric:
 
@@ -45,6 +45,7 @@ Reality evidence is task-aware rather than UI-centric:
 - `CLI_SCRIPT`: CLI output or targeted-test evidence.
 - `GENERATED_ARTIFACT`: generated artifact evidence; FINAL also requires its hash.
 - `DOCS_CONFIG`: document/config consistency or generated-artifact evidence.
+- `FOUNDATION_GOVERNANCE`: Foundation common-rule/governance work. EARLY requires document-consistency evidence showing the approved common-rule/preflight authority; MILESTONE adds targeted selftest evidence; FINAL keeps both and additionally consumes the normal `TEST_GATE_RESULT`. This makes the three checkpoints meaningful for Foundation changes instead of treating UI-style evidence as applicable.
 
 `FINAL_REALITY_CHECK` additionally requires the already-completed `test-gate` result as `TEST_GATE_RESULT` evidence. This reuses proof; it does not rerun the same test merely because the workflow moved forward.
 
