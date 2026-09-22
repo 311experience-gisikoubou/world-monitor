@@ -39,6 +39,7 @@ Use `phase` = `EARLY_CHECK`, `MILESTONE_CHECK`, or `FINAL_REALITY_CHECK`. Bind e
 Reality evidence is task-aware rather than UI-centric:
 
 - `UI`: screenshot, DOM, or runtime evidence.
+- `UI_REFERENCE_REPRODUCTION`: screenshot/DOM/runtime evidence plus machine-verified `UI_MEASUREMENT` and `PROTECTED_FILES_CHECK` evidence at EARLY, MILESTONE, and FINAL REALITY.
 - `BACKEND_API`: API response, runtime, or targeted-test evidence.
 - `DB_SCHEMA`: schema/state evidence; FINAL requires live DB-state or runtime evidence as well.
 - `CLI_SCRIPT`: CLI output or targeted-test evidence.
@@ -46,6 +47,46 @@ Reality evidence is task-aware rather than UI-centric:
 - `DOCS_CONFIG`: document/config consistency or generated-artifact evidence.
 
 `FINAL_REALITY_CHECK` additionally requires the already-completed `test-gate` result as `TEST_GATE_RESULT` evidence. This reuses proof; it does not rerun the same test merely because the workflow moved forward.
+
+### Approved Reference Reproduction Gate
+
+An approved-reference implementation is not an ordinary `UI` task. Classify it as `UI_REFERENCE_REPRODUCTION` so a design cannot be declared complete from implementation reasoning or screenshot impression alone.
+
+Before implementation, run the preparation gate with a project-local reproduction config:
+
+```text
+<preflight-json> | node .agents/skills/test-gate/ui-reference-reproduction-gate.mjs
+```
+
+The config must point to an already-prepared approved reference/version, overlay-verified dimension table, tolerances, inspection script, display conditions, fixed synthetic dummy data, and overlay proof. The implementation AI must not create, infer, fill, or relax those preparation inputs. A missing, contradictory, untracked, symlinked, stale, or mismatched input returns `STOP`. Pass the preflight receipt's `protectedPaths` to the Claude implementation route as `forbiddenScope`.
+
+At EARLY, MILESTONE, and FINAL REALITY, execute the fixed inspection script against the actual rendered application and submit its DOM/CSS values to the reproduction gate in `EVALUATE` mode. The gate itself decides each fixed check ID from the prepared expected value and tolerance. Position, size, spacing, font, and color are the primary PASS/FAIL evidence. A numeric or exact-value FAIL must be fixed and remeasured before continuing. If the same check ID fails three consecutive measured attempts, the gate returns `STOP / REPEATED_CHECK_FAILURE`.
+
+A PASS `UI_MEASUREMENT_V1` receipt is tamper-evident and bound to the exact `stateId`. Supply that same receipt to staged reality evidence as both `UI_MEASUREMENT` and `PROTECTED_FILES_CHECK`; the staged gate independently verifies its integrity/state binding and that protected preparation files still match their preflight hashes.
+
+Self-test:
+
+```text
+node .agents/skills/test-gate/ui-reference-reproduction-gate-selftest.mjs
+```
+
+### Visual Diff Engine — Supplemental Evidence
+
+Screenshot, overlay, and pixel-diff output help locate visual drift and belong in PR evidence, but they are **not** the PASS/FAIL authority for `UI_REFERENCE_REPRODUCTION`. They cannot override a failed DOM/CSS measurement or substitute for an unrun inspection.
+
+The dependency-free helper can still compare the approved image and actual screenshot under fixed capture conditions:
+
+```text
+node .agents/skills/test-gate/visual-diff-engine.mjs --root <repo-root> --view-id <viewId> --actual <actual-screenshot.png> --pixel-delta-threshold <0-255> --max-changed-ratio <0-1> --actual-viewport WxH --state-id <stateId> [--out <evidence.json>] [--pretty]
+```
+
+Its result records dimensions, changed pixel count/ratio, mean absolute channel delta, file hashes, viewport matching, and exact state binding. Thresholds remain explicit rather than guessed. Use the output as supplemental diagnosis/comparison evidence only.
+
+Self-test:
+
+```text
+node .agents/skills/test-gate/visual-diff-engine-selftest.mjs
+```
 
 A repository, Project Context, work target, execution surface, authority, checkpoint, evidence failure, missing required evidence, or stale `stateId` returns `STOP`. Fix the cause and rerun only the invalidated checkpoint. Do not continue into finer implementation or final PR audit after a failed staged check.
 

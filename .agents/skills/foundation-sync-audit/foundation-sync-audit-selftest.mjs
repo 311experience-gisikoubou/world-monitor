@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { mkdtemp, mkdir, rm, writeFile, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 const gateArg = process.argv[2];
@@ -108,6 +109,12 @@ try {
   await writeFile(join(source, 'templates', '.claude', 'skills', 'test-gate', 'SKILL.md.template'), wrapper('test-gate'));
   await rm(join(source, 'VERSION'));
   expectStop('FOUNDATION_SOURCE_VERSION_MISSING');
+
+  const layeredSelftest = join(dirname(fileURLToPath(import.meta.url)), 'foundation-layered-sync-selftest.mjs');
+  const layered = spawnSync(process.execPath, [layeredSelftest], { encoding: 'utf8' });
+  if (layered.status !== 0) {
+    throw new Error(`layered selftest failed: ${layered.stdout} ${layered.stderr}`);
+  }
 
   console.log('foundation-sync-audit selftest: PASS');
 } finally {

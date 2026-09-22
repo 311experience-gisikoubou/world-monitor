@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 
@@ -43,6 +43,8 @@ async function initSource(kind) {
   await writeFile(join(source, '.agents', 'skills', 'README.md'), kind === 'old' ? '# skills old\n' : '# skills new\n');
   await writeSkill(source, 'foundation-sync-audit', 'sync audit description');
   await copyFile(auditGate, join(source, '.agents', 'skills', 'foundation-sync-audit', 'foundation-sync-audit.mjs'));
+  await copyFile(join(dirname(auditGate), 'managed-surface.mjs'), join(source, '.agents', 'skills', 'foundation-sync-audit', 'managed-surface.mjs'));
+  await copyFile(join(dirname(auditGate), 'entrypoint-renderer.mjs'), join(source, '.agents', 'skills', 'foundation-sync-audit', 'entrypoint-renderer.mjs'));
   await writeSkill(source, 'preflight-audit', 'preflight description', kind === 'old' ? 'old\n' : 'new\n');
   const preflightDir = join(source, '.agents', 'skills', 'preflight-audit');
   const operationMarker = kind === 'old' ? 'old-operation-gate' : 'new-operation-gate';

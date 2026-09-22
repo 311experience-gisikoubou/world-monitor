@@ -98,6 +98,22 @@ const outsideRelease = structuredClone(release);
 outsideRelease.entries = [{ path: 'src/app.ts', oldSha: A, newSha: B }];
 assert.equal(run(manifest([target('acme/x', 'main', { 'src/app.ts': A })], outsideRelease), 2).code, 'FOUNDATION_BATCH_PATH_OUTSIDE_SHARED_SURFACE');
 
+const layeredRelease = {
+  fromVersion: '1.0.0-dev.86', sourceVersion: '1.0.0-dev.87', fromCommit: E, sourceCommit: F,
+  entries: [
+    { path: 'CORE.md', oldSha: null, newSha: A },
+    { path: 'GEMINI.md', oldSha: null, newSha: B },
+    { path: '.claude/CLAUDE.md', oldSha: null, newSha: C },
+    { path: '.agents/rules/ai-foundation.md', oldSha: null, newSha: D },
+    { path: 'roles/GEMINI.md', oldSha: null, newSha: G },
+    { path: 'learnings/L-test.md', oldSha: null, newSha: H },
+  ],
+};
+const layeredTargetShas = Object.fromEntries(layeredRelease.entries.map(entry => [entry.path, null]));
+const layeredBatch = run(manifest([target('acme/layered', 'foundation/dev87', layeredTargetShas)], layeredRelease));
+assert.equal(layeredBatch.targets[0].remotePlan.counts.created, layeredRelease.entries.length);
+assert.equal(layeredBatch.targets[0].remotePlan.counts.planned, layeredRelease.entries.length);
+
 const unchangedRelease = structuredClone(release);
 unchangedRelease.entries = [{ path: 'AGENTS.md', oldSha: A, newSha: A }];
 assert.equal(run(manifest([target('acme/x', 'main', { 'AGENTS.md': A })], unchangedRelease), 2).code, 'FOUNDATION_BATCH_UNCHANGED_RELEASE_ENTRY');

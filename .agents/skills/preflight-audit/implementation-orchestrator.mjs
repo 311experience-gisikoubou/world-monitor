@@ -71,7 +71,10 @@ export function validateOrchestrationTask(payload) {
       !payload.allowedScope.every((item) => validScopePattern(item))) {
     errors.push('allowedScope_invalid');
   }
-  if (!optionalStringArray(payload.forbiddenScope)) errors.push('forbiddenScope_invalid');
+  if (payload.forbiddenScope !== undefined && (!Array.isArray(payload.forbiddenScope) ||
+      !payload.forbiddenScope.every((item) => validScopePattern(item)))) {
+    errors.push('forbiddenScope_invalid');
+  }
   if (!optionalStringArray(payload.doneConditions)) errors.push('doneConditions_invalid');
   if (!optionalStringArray(payload.requiredTests)) errors.push('requiredTests_invalid');
   if (!ALLOWED_DATA_CLASSES.has(payload.dataClass)) errors.push('dataClass_invalid');
@@ -188,6 +191,7 @@ export function runImplementationOrchestration(payload, {
     repoRoot: payload.repoRoot,
     branch: payload.branch,
     allowedScope: [...payload.allowedScope],
+    forbiddenScope: Array.isArray(payload.forbiddenScope) ? [...payload.forbiddenScope] : [],
     repository: { owner: payload.repository.owner, name: payload.repository.name },
   }, { desc, envSource, timeoutMs });
   if (runner.result !== 'COMPLETED') {

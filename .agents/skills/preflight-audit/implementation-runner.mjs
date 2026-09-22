@@ -21,7 +21,7 @@ const ROUTE_ID = 'claude-implementation-write';
 export const ALLOWED_CAPABILITIES = new Set(['implementation', 'bugfix', 'refactor', 'testing']);
 export const ALLOWED_DATA_CLASSES = new Set(['source-only', 'synthetic', 'public']);
 const SHA_RE = /^[0-9a-f]{40}$/i;
-const ALLOWED_KEYS = new Set(['schemaVersion', 'taskId', 'capability', 'dataClass', 'prompt', 'repoRoot', 'branch', 'allowedScope', 'repository']);
+const ALLOWED_KEYS = new Set(['schemaVersion', 'taskId', 'capability', 'dataClass', 'prompt', 'repoRoot', 'branch', 'allowedScope', 'forbiddenScope', 'repository']);
 const MAX_INPUT_BYTES = 64 * 1024;
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const DEFAULT_TIMEOUT_MS = 180000;
@@ -82,6 +82,10 @@ export function changedPathsWithinScope(changedPaths, allowedScope) {
   return changedPaths.every((changedPath) => allowedScope.some((pattern) => pathMatchesScopePattern(changedPath, pattern)));
 }
 
+export function changedPathsInForbiddenScope(changedPaths, forbiddenScope = []) {
+  return changedPaths.filter((changedPath) => forbiddenScope.some((pattern) => pathMatchesScopePattern(changedPath, pattern)));
+}
+
 function validRepository(repository) {
   return repository && typeof repository === 'object' && !Array.isArray(repository) &&
     Object.keys(repository).every((key) => key === 'owner' || key === 'name') &&
@@ -103,6 +107,10 @@ export function validateImplementationTask(payload) {
   if (!Array.isArray(payload.allowedScope) || payload.allowedScope.length === 0 ||
       !payload.allowedScope.every((item) => validScopePattern(item))) {
     errors.push('allowedScope_invalid');
+  }
+  if (payload.forbiddenScope !== undefined && (!Array.isArray(payload.forbiddenScope) ||
+      !payload.forbiddenScope.every((item) => validScopePattern(item)))) {
+    errors.push('forbiddenScope_invalid');
   }
   if (!validRepository(payload.repository)) errors.push('repository_invalid');
   return errors;
@@ -297,6 +305,17 @@ export function computeChangeSetSha256(repoRoot, preHead, toRef = null) {
   return { changeSetSha256: hashChangeRecords(records), changedPaths: records.map((r) => r.path) };
 }
 
+function buildGuardedImplementationPrompt(payload) {
+  const forbidden = Array.isArray(payload.forbiddenScope) && payload.forbiddenScope.length > 0
+    ? payload.forbiddenScope.join(', ')
+    : '(none)';
+  return [
+    'The following paths are protected and must not be modified: ' + forbidden,
+    'If this is approved-reference reproduction: provisional/development UI, old UI/screenshots, and AI memory are not visual authority. Use only the approved reference and prepared verified dimensions/style values. Existing implementation may be referenced only for logic, data flow, and state behavior. If its visual structure conflicts, rebuild that structure while preserving logic/data behavior. Do not redesign, improve, add, remove, reorder, or relax the prepared criteria.',
+    payload.prompt,
+  ].join('\n\n');
+}
+
 function implementationClaudeArgs(emptyMcpConfig) {
   return [
     '--print', '--input-format', 'text', '--output-format', 'json',
@@ -403,7 +422,7 @@ export function runClaudeImplementationTask(payload, {
       return stop('SUBSCRIPTION_AUTH_NOT_VERIFIED', taskId);
     }
     const result = run(isolatedDesc, implementationClaudeArgs('{"mcpServers":{}}'), {
-      cwd: repoCheck.resolvedRoot, env, input: payload.prompt, timeout: timeoutMs,
+      cwd: repoCheck.resolvedRoot, env, input: buildGuardedImplementationPrompt(payload), timeout: timeoutMs,
     });
     if (result.error?.code === 'ETIMEDOUT') return stop('PROVIDER_TIMEOUT', taskId);
     if (result.error?.code === 'ENOBUFS') return stop('PROVIDER_OUTPUT_TOO_LARGE', taskId);
@@ -422,6 +441,13 @@ export function runClaudeImplementationTask(payload, {
     const changeSet = computeChangeSetSha256(repoCheck.resolvedRoot, preHead);
     if (!changeSet) return stop('EXECUTION_EVIDENCE_UNAVAILABLE', taskId);
     if (changeSet.changedPaths.length === 0) return stop('NO_SOURCE_CHANGES_PRODUCED', taskId);
+
+    // Protected/reference/test inputs are a stricter boundary than allowedScope.
+    // A path may be inside the implementation area but still be immutable for this task.
+    const forbiddenChangedPaths = changedPathsInForbiddenScope(changeSet.changedPaths, payload.forbiddenScope ?? []);
+    if (forbiddenChangedPaths.length > 0) {
+      return { ...stop('FORBIDDEN_SCOPE_VIOLATION', taskId), changedPaths: changeSet.changedPaths, forbiddenChangedPaths, preHead };
+    }
 
     // Enforced after Claude has already returned and before COMPLETED is
     // reported: every changed path must be covered by allowedScope. This
@@ -444,6 +470,7 @@ export function runClaudeImplementationTask(payload, {
       output: parsed.result,
       evidence: implementationRunnerEvidence({ auth, credentialEnvAbsent: true, runnerSupported: true, repoVerified: true }),
       executionEvidence: { preHead, changeSetSha256: changeSet.changeSetSha256, changedPaths: changeSet.changedPaths },
+      forbiddenScope: [...(payload.forbiddenScope ?? [])],
     };
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });

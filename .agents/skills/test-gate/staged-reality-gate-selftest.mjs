@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { evaluate } from './staged-reality-gate.mjs';
 
 const S = 'worktree:' + 'a'.repeat(64);
@@ -16,6 +17,27 @@ const identity = {
 };
 const authority = { state: 'CURRENT', source: 'CANONICAL_CONTRACT', reference: 'PROJECT_CONTEXT.json#current-target' };
 const ev = (kind, stateId = S, status = 'PASS') => ({ kind, status, source: 'local', reference: 'selftest:' + kind, stateId });
+function uiReceipt(stateId = G, phase = 'FINAL_REALITY_CHECK') {
+  const core = {
+    schemaVersion: 1,
+    receiptType: 'UI_MEASUREMENT_V1',
+    result: 'PASS',
+    code: 'UI_MEASUREMENT_PASS',
+    phase,
+    stateId,
+    artifactId: 'design-v1',
+    viewId: 'home',
+    referenceVersion: 'v1',
+    preflightReceiptId: '1'.repeat(64),
+    protectedFilesUnchanged: true,
+    checks: [],
+    failedIds: [],
+  };
+  return { ...core, receiptId: createHash('sha256').update(JSON.stringify(core)).digest('hex') };
+}
+const uiEv = (kind, stateId = G, receipt = uiReceipt(stateId)) => ({
+  kind, status: 'PASS', source: 'local', reference: 'selftest:' + kind, stateId, receipt,
+});
 
 function input(phase, taskTypes, evidence, checkpoint, stateId = S) {
   return { schemaVersion: 1, phase, taskTypes, stateId, identity, authority, checkpoint, evidence };
@@ -136,6 +158,73 @@ result = evaluate(input(
   { scopeMatch: true, milestoneObserved: true, structureMatch: true },
 ));
 assert.equal(result.result, 'PASS');
+
+// Ordinary UI tasks remain backward compatible. Approved-reference reproduction is explicit
+// and uses numeric DOM/CSS measurement plus protected-file evidence at every staged check.
+// Overlay/pixel diff is intentionally outside the staged PASS/FAIL decision and remains PR evidence.
+result = evaluate(input(
+  'EARLY_CHECK', ['UI'],
+  [ev('GIT_STATE'), ev('DIFF'), ev('SCREENSHOT')],
+  { scopeMatch: true, firstSliceObserved: true },
+));
+assert.equal(result.result, 'PASS');
+assert(!result.requiredEvidence.some(x => x.includes('UI_MEASUREMENT')));
+
+result = evaluate(input(
+  'FINAL_REALITY_CHECK', ['UI'],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), finalEv('TEST_GATE_RESULT')],
+  { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
+  G,
+));
+assert.equal(result.result, 'PASS');
+
+result = evaluate(input(
+  'EARLY_CHECK', ['UI_REFERENCE_REPRODUCTION'],
+  [ev('GIT_STATE'), ev('DIFF'), ev('SCREENSHOT')],
+  { scopeMatch: true, firstSliceObserved: true },
+));
+assert.equal(result.code, 'REQUIRED_EVIDENCE_MISSING');
+assert(result.missingEvidence.includes('UI_MEASUREMENT'));
+assert(result.missingEvidence.includes('PROTECTED_FILES_CHECK'));
+
+const earlyUiReceipt = uiReceipt(S, 'EARLY_CHECK');
+result = evaluate(input(
+  'EARLY_CHECK', ['UI_REFERENCE_REPRODUCTION'],
+  [ev('GIT_STATE'), ev('DIFF'), ev('SCREENSHOT'), uiEv('UI_MEASUREMENT', S, earlyUiReceipt), uiEv('PROTECTED_FILES_CHECK', S, earlyUiReceipt)],
+  { scopeMatch: true, firstSliceObserved: true },
+));
+assert.equal(result.result, 'PASS');
+assert.equal(result.code, 'EARLY_CHECK_PASS');
+assert.equal(result.evidence.find(x => x.kind === 'UI_MEASUREMENT').uiReproductionReceiptId, earlyUiReceipt.receiptId);
+
+const finalUiReceipt = uiReceipt(G, 'FINAL_REALITY_CHECK');
+result = evaluate(input(
+  'FINAL_REALITY_CHECK', ['UI_REFERENCE_REPRODUCTION'],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), uiEv('UI_MEASUREMENT', G, finalUiReceipt), uiEv('PROTECTED_FILES_CHECK', G, finalUiReceipt), finalEv('TEST_GATE_RESULT')],
+  { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
+  G,
+));
+assert.equal(result.result, 'PASS');
+assert.equal(result.code, 'FINAL_REALITY_CHECK_PASS');
+
+const tamperedUiReceipt = uiReceipt(G, 'FINAL_REALITY_CHECK');
+tamperedUiReceipt.protectedFilesUnchanged = false;
+result = evaluate(input(
+  'FINAL_REALITY_CHECK', ['UI_REFERENCE_REPRODUCTION'],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), uiEv('UI_MEASUREMENT', G, tamperedUiReceipt), uiEv('PROTECTED_FILES_CHECK', G, tamperedUiReceipt), finalEv('TEST_GATE_RESULT')],
+  { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
+  G,
+));
+assert.equal(result.code, 'UI_REPRODUCTION_EVIDENCE_INVALID');
+
+result = evaluate(input(
+  'FINAL_REALITY_CHECK', ['UI_REFERENCE_REPRODUCTION'],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), uiEv('UI_MEASUREMENT', 'worktree:' + 'c'.repeat(64), uiReceipt('worktree:' + 'c'.repeat(64))), uiEv('PROTECTED_FILES_CHECK', 'worktree:' + 'c'.repeat(64), uiReceipt('worktree:' + 'c'.repeat(64))), finalEv('TEST_GATE_RESULT')],
+  { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
+  G,
+));
+assert.equal(result.code, 'STALE_EVIDENCE');
+assert.equal(result.kind, 'UI_MEASUREMENT');
 
 result = evaluate(input(
   'EARLY_CHECK', ['CLI_SCRIPT'],

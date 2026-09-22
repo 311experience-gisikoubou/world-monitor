@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
+import { isManagedTargetPath } from './managed-surface.mjs';
 
 const args = process.argv.slice(2);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -30,7 +31,7 @@ function normalizePath(value) {
   return p;
 }
 function isCanonicalPath(path) {
-  return path === 'AGENTS.md' || path.startsWith('.agents/skills/') || path.startsWith('.claude/skills/');
+  return isManagedTargetPath(path);
 }
 function normalizeBranch(value) {
   if (typeof value !== 'string') return '';

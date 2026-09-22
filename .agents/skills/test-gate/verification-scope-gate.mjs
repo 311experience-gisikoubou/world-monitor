@@ -32,7 +32,7 @@ const ESCALATION_REASONS = new Set([
 ]);
 
 const DOC_RE = /(^|\/)(docs?|documentation)(\/|$)|\.(md|mdx|txt|rst)$/i;
-const GOVERNANCE_RE = /(^|\/)\.agents\/|(^|\/)templates\/\.claude\/skills\/|(^|\/)(AGENTS(?:\.local)?\.md|OPERATIONS\.md|CORE\.md|PROJECT_COMPLETION\.md|CURRENT_STATUS\.md|CHANGELOG\.md|VERSION)$|(^|\/)tools\/portfolio-governance-audit(?:-selftest)?\.mjs$/i;
+const GOVERNANCE_RE = /(^|\/)\.agents\/|(^|\/)templates\/\.claude\/skills\/|(^|\/)(AGENTS(?:\.local)?\.md|OPERATIONS\.md|CORE\.md|PROJECT_COMPLETION\.md|PROJECT_CONTEXT\.json|CURRENT_STATUS\.md|STATUS\.md|CHANGELOG\.md|VERSION)$|(^|\/)tools\/portfolio-governance-audit(?:-selftest)?\.mjs$/i;
 const DEPENDENCY_RE = /(^|\/)(package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|Cargo\.(?:toml|lock)|pyproject\.toml|poetry\.lock|uv\.lock|requirements[^/]*\.txt|Pipfile(?:\.lock)?|go\.(?:mod|sum)|composer\.(?:json|lock)|pom\.xml|build\.gradle(?:\.kts)?|gradle\.lockfile)$/i;
 const FRONTEND_DEPENDENCY_RE = /(^|\/)(package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?)$/i;
 const BACKEND_DEPENDENCY_RE = /(^|\/)(Cargo\.(?:toml|lock)|pyproject\.toml|poetry\.lock|uv\.lock|requirements[^/]*\.txt|Pipfile(?:\.lock)?|go\.(?:mod|sum)|composer\.(?:json|lock)|pom\.xml|build\.gradle(?:\.kts)?|gradle\.lockfile)$/i;

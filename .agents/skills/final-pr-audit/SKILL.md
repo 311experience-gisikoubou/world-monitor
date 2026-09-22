@@ -265,6 +265,8 @@ FINAL_REALITY_RECEIPT=<receipt-id>
 
 The receipt must use task-appropriate objective evidence and include the existing successful `TEST_GATE_RESULT`; do not rerun tests solely to satisfy this receiving-side gate. If the source/diff/state changes after the receipt, the old receipt is stale and blocks merge readiness until the affected reality check is re-evaluated. A test PASS never substitutes for proof that the actual deliverable is the intended target.
 
+For `UI_REFERENCE_REPRODUCTION`, independently confirm that the FINAL receipt contains verified state-bound `UI_MEASUREMENT` and `PROTECTED_FILES_CHECK` evidence. The PR evidence must identify the approved reference version and include the reference/actual/diff comparison, fixed check-ID results, minimum regression result, confirmation that protected preparation inputs were unchanged, and any AI-chosen behavior for states not shown in the reference. Screenshot/overlay/pixel diff remains supplemental and cannot override a numeric measurement FAIL. The independent audit checks the evidence and diff; it does not re-implement the UI or relax the preparation thresholds.
+
 ### Contract Conformance Gate
 
 Functional verification and Contract Conformance are independent. Before `PREPARED_FOR_MERGE=yes`, rerun `.agents/skills/handoff/canonical-contract-gate.mjs` against the exact current HEAD contract and the audited implementation target/spec-use state.

@@ -105,6 +105,11 @@ process.stdin.on('end', () => {
     console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Edited an out-of-scope file' }));
     return;
   }
+  if (mode === 'forbidden') {
+    fs.writeFileSync('src/widget.ts', 'export const widget = 999;\\n', 'utf8');
+    console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Edited a protected file' }));
+    return;
+  }
   fs.writeFileSync('src/widget.ts', 'export const widget = 2;\\n', 'utf8');
   fs.writeFileSync('src/widget-helper.ts', 'export const helper = true;\\n', 'utf8');
   console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Updated src/widget.ts and added src/widget-helper.ts' }));
@@ -127,6 +132,8 @@ process.stdin.on('end', () => {
     repository: { owner: 'acme', name: 'widgets' },
   };
   assert(validateOrchestrationTask(basePayload).length === 0, 'valid orchestration payload rejected');
+  assert(validateOrchestrationTask({ ...basePayload, forbiddenScope: ['src/protected-reference.ts'] }).length === 0, 'valid forbiddenScope must be accepted');
+  assert(validateOrchestrationTask({ ...basePayload, forbiddenScope: ['src/*.ts'] }).includes('forbiddenScope_invalid'), 'unsupported forbiddenScope wildcard must fail closed');
 
   // --- golden path: route selection -> runner -> real edit (modified + new file) -> proof ---
   const routed = runImplementationOrchestration(basePayload, { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
@@ -213,6 +220,15 @@ process.stdin.on('end', () => {
   assert(dirtyStop.result === 'STOP' && dirtyStop.code === 'WORKTREE_NOT_CLEAN', `dirty worktree must STOP: ${JSON.stringify(dirtyStop)}`);
   fs.rmSync(path.join(repoDir, 'PRE_EXISTING_UNTRACKED.txt'));
 
+  // --- negative: protected path must STOP even when it is inside allowedScope ---
+  const forbidden = runImplementationOrchestration(
+    { ...basePayload, taskId: 'orch-protected', forbiddenScope: ['src/widget.ts'] },
+    { desc: desc('forbidden'), envSource: cleanEnv, timeoutMs: 5000 },
+  );
+  assert(forbidden.result === 'STOP' && forbidden.runner?.code === 'FORBIDDEN_SCOPE_VIOLATION', `protected edit must STOP: ${JSON.stringify(forbidden)}`);
+  assert(forbidden.runner?.forbiddenChangedPaths?.includes('src/widget.ts'), 'protected STOP must identify the changed protected path');
+  git(repoDir, ['checkout', '--', 'src/widget.ts']);
+
   // --- negative: out-of-scope edit must STOP after Claude returns, before success is reported ---
   const outOfScope = runImplementationOrchestration(
     { ...basePayload, taskId: 'orch-5', allowedScope: ['src/widget.ts'] },
@@ -223,7 +239,7 @@ process.stdin.on('end', () => {
 
   const records = fs.readFileSync(logPath, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
   const runRecords = records.filter((r) => r.phase === 'run');
-  assert(runRecords.length === 2, `fake Claude must run exactly for the golden path and the out-of-scope negative: ${runRecords.length}`);
+  assert(runRecords.length === 3, `fake Claude must run exactly for the golden path, protected-scope negative, and out-of-scope negative: ${runRecords.length}`);
 
   console.log('implementation-orchestrator selftest: PASS');
 } finally {

@@ -10,6 +10,7 @@ assert.equal(classifyFiles(['Cargo.lock']).profile, 'DEPENDENCY_CHANGE');
 assert.equal(classifyFiles(['src/main.ts', 'src-tauri/src/lib.rs']).profile, 'MIXED_RUNTIME');
 assert.equal(classifyFiles(['.agents/skills/test-gate/SKILL.md']).profile, 'GOVERNANCE_ONLY');
 assert.equal(classifyFiles(['tools/portfolio-governance-audit.mjs']).profile, 'GOVERNANCE_ONLY');
+assert.equal(classifyFiles(['STATUS.md', 'PROJECT_CONTEXT.json']).profile, 'GOVERNANCE_ONLY');
 assert.equal(classifyFiles(['templates/.claude/skills/test-gate/SKILL.md.template']).profile, 'GOVERNANCE_ONLY');
 
 let result = evaluate({
