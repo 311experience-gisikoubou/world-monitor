@@ -7,6 +7,26 @@
   "profile": "LIGHT",
   "scope": "Approved semantic scope.",
   "assumptions": [],
+  "solutionReview": {
+    "options": [
+      {
+        "id": "option-a",
+        "decision": "REUSE_EXISTING",
+        "summary": "Approved recommended option.",
+        "assessment": {
+          "safety": "Copied from the approved brief.",
+          "accuracy": "Copied from the approved brief.",
+          "simplicity": "Copied from the approved brief.",
+          "humanOperations": "Copied from the approved brief.",
+          "maintenance": "Copied from the approved brief.",
+          "reversibility": "Copied from the approved brief.",
+          "existingOverlap": "Copied from the approved brief."
+        }
+      }
+    ],
+    "selectedOptionId": "option-a",
+    "extendRationale": null
+  },
   "safetyFacts": {
     "protectedOrPatientData": false,
     "externalCommunication": false,

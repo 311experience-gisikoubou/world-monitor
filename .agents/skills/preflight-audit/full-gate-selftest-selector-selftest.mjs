@@ -27,6 +27,8 @@ function fixture(changedFiles, overrides = {}) {
 function assert(condition, message) {
   if (!condition) throw new Error(`FAIL: ${message}`);
 }
+// Mirrors the selector's ordinary CORE (fast-path, security-preflight, full-gate-selector).
+const CORE_SIZE = 3;
 function select(files, overrides = {}) {
   return selector.selectSelftests(fixture(files, overrides));
 }
@@ -38,19 +40,29 @@ const operationCodeOnly = select([
 assert(operationCodeOnly.selection === 'IMPACT_SCOPED', 'operation code-only change should be impact scoped');
 assert(operationCodeOnly.commands.length === operationCodeOnly.selectedTests.length, 'commands must match selected test count');
 assert(operationCodeOnly.commands.every((item,i) => item.id === operationCodeOnly.selectedTests[i] && item.argv[0] === 'node'), 'commands must align with selected tests');
-for (const id of ['merge-authorization','merge-execution','fast-path','security-preflight','full-gate-selector','operation-preflight']) {
+for (const id of ['fast-path','security-preflight','full-gate-selector','operation-preflight']) {
   assert(operationCodeOnly.selectedTests.includes(id), `missing operation/core test ${id}`);
+}
+for (const id of ['merge-authorization','merge-execution']) {
+  assert(!operationCodeOnly.selectedTests.includes(id), `merge-control test must not be in the ordinary CORE any more: ${id}`);
 }
 for (const id of ['claude-runner','foundation-update','stagnation','project-context','foundation-bootstrap']) {
   assert(!operationCodeOnly.selectedTests.includes(id), `unrelated slow test selected: ${id}`);
 }
+assert(operationCodeOnly.selectedTests.length === 4, `ordinary IMPACT_SCOPED CORE + one family should select exactly 4 tests, got ${operationCodeOnly.selectedTests.length}`);
+assert(operationCodeOnly.selectedTestCount === operationCodeOnly.selectedTests.length, 'selectedTestCount must match selectedTests length');
+assert(operationCodeOnly.reductionPercent > 0 && operationCodeOnly.reductionPercent <= 100, 'ordinary IMPACT_SCOPED reduction must be a positive percentage');
 
 const operationWithSharedDoc = select([
   '.agents/skills/preflight-audit/operation-preflight.mjs',
   '.agents/skills/preflight-audit/SKILL.md',
 ]);
-assert(operationWithSharedDoc.selection === 'FULL_SUITE', 'preflight shared instruction file must use full suite');
-assert(operationWithSharedDoc.reasons.includes('HIGH_COUPLING_PATH_REQUIRES_FULL_SUITE'), 'preflight shared instruction reason missing');
+assert(operationWithSharedDoc.selection === 'IMPACT_SCOPED', 'ordinary instruction-only SKILL.md paired with mapped code must not force full suite');
+assert(operationWithSharedDoc.selectedTests.includes('common-rule-health'), 'instruction-doc family must select common-rule-health');
+assert(operationWithSharedDoc.selectedTests.includes('operation-preflight'), 'operation-preflight family must still be selected');
+for (const id of ['merge-authorization','merge-execution']) {
+  assert(!operationWithSharedDoc.selectedTests.includes(id), `generic instruction-doc change must not pull in merge-control test ${id}`);
+}
 const projectMemory = select(['.agents/skills/handoff/project-working-memory.mjs']);
 assert(projectMemory.selection === 'IMPACT_SCOPED', 'project working memory code should be impact scoped');
 for (const id of ['project-context','project-memory']) assert(projectMemory.selectedTests.includes(id), `project memory selection missing ${id}`);
@@ -109,23 +121,65 @@ for (const id of ['foundation-sync','foundation-bootstrap','foundation-update','
 }
 const batchRollout = select(['.agents/skills/foundation-sync-audit/foundation-batch-rollout-plan.mjs']);
 assert(batchRollout.selection === 'IMPACT_SCOPED', 'batch rollout planner should be impact scoped');
-for (const id of ['merge-authorization','merge-execution','fast-path','security-preflight','full-gate-selector','foundation-sync','foundation-bootstrap','foundation-update','foundation-remote-plan','foundation-batch-rollout']) {
+for (const id of ['fast-path','security-preflight','full-gate-selector','foundation-sync','foundation-bootstrap','foundation-update','foundation-remote-plan','foundation-batch-rollout']) {
   assert(batchRollout.selectedTests.includes(id), `batch rollout selection missing ${id}`);
 }
+for (const id of ['merge-authorization','merge-execution']) {
+  assert(!batchRollout.selectedTests.includes(id), `batch rollout selection must not pull in unrelated merge-control test ${id}`);
+}
 assert(!batchRollout.selectedTests.includes('claude-runner'), 'batch rollout selection should not include unrelated claude-runner');
+
+// Instruction-only SKILL.md docs are scoped by family instead of forcing the full suite.
+const handoffDoc = select(['.agents/skills/handoff/SKILL.md']);
+assert(handoffDoc.selection === 'IMPACT_SCOPED', 'handoff skill documentation should be impact scoped, not full suite');
+for (const id of ['common-rule-health','project-context','project-memory']) {
+  assert(handoffDoc.selectedTests.includes(id), `handoff-doc family missing ${id}`);
+}
+assert(!handoffDoc.selectedTests.includes('merge-authorization'), 'handoff documentation must not pull in merge-control tests');
+assert(handoffDoc.reasons.includes('IMPACT_FAMILY_HANDOFF_DOC'), 'handoff-doc family reason missing');
+
 const mixedHandoffDoc = select([
   '.agents/skills/preflight-audit/operation-preflight.mjs',
   '.agents/skills/handoff/SKILL.md',
 ]);
-assert(mixedHandoffDoc.selection === 'FULL_SUITE', 'handoff skill documentation must use full suite');
-assert(mixedHandoffDoc.reasons.includes('HIGH_COUPLING_PATH_REQUIRES_FULL_SUITE'), 'handoff skill documentation reason missing');
+assert(mixedHandoffDoc.selection === 'IMPACT_SCOPED', 'handoff skill documentation mixed with mapped code should be impact scoped');
+for (const id of ['common-rule-health','project-context','project-memory','operation-preflight']) {
+  assert(mixedHandoffDoc.selectedTests.includes(id), `mixed handoff selection missing ${id}`);
+}
+
+const mergeDocOnly = select(['.agents/skills/final-pr-audit/SKILL.md']);
+assert(mergeDocOnly.selection === 'IMPACT_SCOPED', 'merge-control documentation should be impact scoped, not full suite');
+for (const id of ['common-rule-health','merge-authorization','merge-execution']) {
+  assert(mergeDocOnly.selectedTests.includes(id), `merge-control-doc family missing ${id}`);
+}
+assert(mergeDocOnly.reasons.includes('IMPACT_FAMILY_MERGE_CONTROL_DOC'), 'merge-control-doc family reason missing');
 
 const mergeDoc = select([
   '.agents/skills/preflight-audit/operation-preflight.mjs',
   '.agents/skills/final-pr-audit/SKILL.md',
 ]);
-assert(mergeDoc.selection === 'FULL_SUITE', 'merge-control documentation must use full suite');
-assert(mergeDoc.reasons.includes('HIGH_COUPLING_PATH_REQUIRES_FULL_SUITE'), 'merge-control documentation reason missing');
+assert(mergeDoc.selection === 'IMPACT_SCOPED', 'merge-control documentation mixed with mapped code should be impact scoped');
+for (const id of ['common-rule-health','merge-authorization','merge-execution','operation-preflight']) {
+  assert(mergeDoc.selectedTests.includes(id), `mixed merge-control doc selection missing ${id}`);
+}
+
+const verificationScope = select(['.agents/skills/test-gate/verification-scope-gate.mjs']);
+assert(verificationScope.selection === 'IMPACT_SCOPED', 'verification-scope gate change should be impact scoped');
+assert(verificationScope.selectedTests.includes('verification-scope'), 'verification-scope selftest missing');
+assert(
+  verificationScope.selectedTests.length === CORE_SIZE + 1,
+  `verification-scope family should only add verification-scope on top of CORE, got ${JSON.stringify(verificationScope.selectedTests)}`,
+);
+
+const legacyAudit = select(['.agents/skills/preflight-audit/legacy-implementation-audit.mjs']);
+assert(legacyAudit.selection === 'IMPACT_SCOPED', 'legacy-implementation-audit change should be impact scoped');
+for (const id of ['legacy-implementation-audit','implementation-route-receipt']) {
+  assert(legacyAudit.selectedTests.includes(id), `legacy-audit family missing ${id}`);
+}
+assert(
+  legacyAudit.selectedTests.length === CORE_SIZE + 2,
+  `legacy-audit family should only add legacy-implementation-audit + implementation-route-receipt on top of CORE, got ${JSON.stringify(legacyAudit.selectedTests)}`,
+);
 const declaredImpact = select(
   ['.agents/skills/preflight-audit/operation-preflight.mjs'],
   { impacts: impacts({ dependency:true }) },
@@ -145,12 +199,36 @@ const highCoupling = select(['.agents/skills/preflight-audit/fast-path-classifie
 assert(highCoupling.selection === 'FULL_SUITE', 'fast-path classifier change must use full suite');
 assert(highCoupling.selectedTests.length === highCoupling.commands.length && highCoupling.selectedTests.includes('work-start'), 'full suite must include the complete current selftest set');
 assert(highCoupling.reasons.includes('HIGH_COUPLING_PATH_REQUIRES_FULL_SUITE'), 'high coupling reason missing');
+for (const id of ['verification-scope','legacy-implementation-audit']) {
+  assert(highCoupling.selectedTests.includes(id), `full suite must include newly registered test ${id}`);
+}
+assert(highCoupling.reductionPercent === 0, 'FULL_SUITE reductionPercent must be 0');
+assert(highCoupling.selectedTestCount === highCoupling.selectedTests.length, 'FULL_SUITE selectedTestCount must match selectedTests length');
+assert(highCoupling.fullSuiteTestCount === highCoupling.selectedTests.length, 'FULL_SUITE fullSuiteTestCount must equal ALL length');
+
+const mergeAuthorizationCodeHighCoupling = select(['.agents/skills/final-pr-audit/merge-authorization-gate.mjs']);
+assert(mergeAuthorizationCodeHighCoupling.selection === 'FULL_SUITE', 'actual merge-authorization gate code change must use full suite');
+assert(mergeAuthorizationCodeHighCoupling.reasons.includes('HIGH_COUPLING_PATH_REQUIRES_FULL_SUITE'), 'merge-authorization gate high-coupling reason missing');
 
 const docsOnly = select(['CHANGELOG.md','VERSION']);
-assert(docsOnly.selection === 'FULL_SUITE', 'metadata-only governance change must not self-authorize narrow tests');
-assert(docsOnly.reasons.includes('NO_MAPPED_IMPLEMENTATION_CHANGE'), 'metadata-only reason missing');
+assert(docsOnly.selection === 'METADATA_ONLY', 'metadata-only VERSION/CHANGELOG change must be a distinct METADATA_ONLY selection');
+assert(docsOnly.evidenceValid === true, 'metadata-only selection must still report evidenceValid true');
+assert(docsOnly.reasons.includes('METADATA_ONLY_NO_EXECUTABLE_SELFTEST_REQUIRED'), 'metadata-only reason missing');
+assert(docsOnly.selectedTests.length === 0 && docsOnly.commands.length === 0, 'metadata-only selection must have zero selected tests/commands');
+assert(docsOnly.selectedTestCount === 0, 'metadata-only selectedTestCount must be 0');
+assert(docsOnly.reductionPercent === 100, 'metadata-only reductionPercent must be 100');
+const changelogOnly = select(['CHANGELOG.md']);
+assert(changelogOnly.selection === 'METADATA_ONLY', 'CHANGELOG.md-only change must be METADATA_ONLY');
+const versionOnly = select(['VERSION']);
+assert(versionOnly.selection === 'METADATA_ONLY', 'VERSION-only change must be METADATA_ONLY');
+
 const skillOnly = select(['.agents/skills/preflight-audit/SKILL.md']);
-assert(skillOnly.selection === 'FULL_SUITE', 'skill-only governance change must use full suite');
+assert(skillOnly.selection === 'IMPACT_SCOPED', 'generic instruction-only skill documentation should be scoped, not full suite');
+assert(skillOnly.selectedTests.includes('common-rule-health'), 'instruction-doc family must select common-rule-health');
+assert(
+  skillOnly.selectedTests.length === CORE_SIZE + 1,
+  `instruction-doc family should only add common-rule-health on top of CORE, got ${JSON.stringify(skillOnly.selectedTests)}`,
+);
 const incomplete = select(
   ['.agents/skills/preflight-audit/operation-preflight.mjs'],
   { evidenceComplete:false },
@@ -161,6 +239,17 @@ assert(blockedWip.selection === 'FULL_SUITE' && blockedWip.evidenceValid === fal
 assert(blockedWip.reasons.includes('WIP_REVIEW_BLOCKED'), 'blocked WIP reason missing');
 const invalid = selector.selectSelftests({ schemaVersion:2 });
 assert(invalid.selection === 'FULL_SUITE' && invalid.evidenceValid === false, 'invalid evidence must fail closed');
+assert(invalid.reductionPercent === 0, 'invalid-evidence FULL_SUITE reductionPercent must be 0');
+
+// Observability fields must be internally consistent on every result shape.
+for (const result of [operationCodeOnly, handoffDoc, mergeDocOnly, verificationScope, legacyAudit, highCoupling, docsOnly, skillOnly]) {
+  assert(Number.isInteger(result.selectedTestCount), 'selectedTestCount must be an integer');
+  assert(Number.isInteger(result.fullSuiteTestCount) && result.fullSuiteTestCount > 0, 'fullSuiteTestCount must be a positive integer');
+  assert(result.selectedTestCount === result.selectedTests.length, 'selectedTestCount must match selectedTests length');
+  assert(result.reductionPercent >= 0 && result.reductionPercent <= 100, 'reductionPercent must be clamped 0..100');
+  const expected = Math.min(100, Math.max(0, Math.round(((result.fullSuiteTestCount - result.selectedTestCount) / result.fullSuiteTestCount) * 100)));
+  assert(result.reductionPercent === expected, `reductionPercent must match computed reduction, got ${result.reductionPercent} expected ${expected}`);
+}
 
 const cli = spawnSync(
   process.execPath,

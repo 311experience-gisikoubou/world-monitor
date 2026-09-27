@@ -102,6 +102,34 @@ const cli=spawnSync(process.execPath,[gatePath,'--context-file',join(root,'PROJE
 assert.equal(cli.status,0);
 assert.equal(JSON.parse(cli.stdout).contractGate,'PASS');
 
+// Canonical update checkpoints: A unchanged, B post-implementation update,
+// C post-PR update, D unrelated file update.
+const baselineCli=spawnSync(process.execPath,[gatePath,'--context-file',join(root,'PROJECT_CONTEXT.json'),'--checkpoint','PRE_IMPLEMENTATION'],{encoding:'utf8'});
+assert.equal(baselineCli.status,0);
+const baseline=JSON.parse(baselineCli.stdout);
+assert.match(baseline.canonicalSourceFingerprint,/^[0-9a-f]{64}$/);
+
+const unchangedCli=spawnSync(process.execPath,[gatePath,'--context-file',join(root,'PROJECT_CONTEXT.json'),'--checkpoint','PRE_ARTIFACT','--expected-source-fingerprint',baseline.canonicalSourceFingerprint],{encoding:'utf8'});
+assert.equal(unchangedCli.status,0);
+assert.equal(JSON.parse(unchangedCli.stdout).canonicalUnchanged,true);
+
+writeFileSync(join(root,'unrelated-note.txt'),'not canonical');
+const unrelatedCli=spawnSync(process.execPath,[gatePath,'--context-file',join(root,'PROJECT_CONTEXT.json'),'--checkpoint','PRE_FINAL_AUDIT','--expected-source-fingerprint',baseline.canonicalSourceFingerprint],{encoding:'utf8'});
+assert.equal(unrelatedCli.status,0);
+assert.equal(JSON.parse(unrelatedCli.stdout).canonicalSourceFingerprint,baseline.canonicalSourceFingerprint);
+
+writeFileSync(join(root,'PROJECT_CONTEXT.json'),JSON.stringify(manifest(),null,4));
+const changedAfterImplementation=spawnSync(process.execPath,[gatePath,'--context-file',join(root,'PROJECT_CONTEXT.json'),'--checkpoint','PRE_ARTIFACT','--expected-source-fingerprint',baseline.canonicalSourceFingerprint],{encoding:'utf8'});
+assert.equal(changedAfterImplementation.status,2);
+const changedResult=JSON.parse(changedAfterImplementation.stdout);
+assert.equal(changedResult.code,'CANONICAL_SOURCE_CHANGED');
+assert.equal(changedResult.staleEvidenceInvalidated,true);
+assert(changedResult.invalidatedEvidence.includes('SCREENSHOTS'));
+
+const changedAfterPr=spawnSync(process.execPath,[gatePath,'--context-file',join(root,'PROJECT_CONTEXT.json'),'--checkpoint','PRE_PR','--expected-source-fingerprint',baseline.canonicalSourceFingerprint],{encoding:'utf8'});
+assert.equal(changedAfterPr.status,2);
+assert.equal(JSON.parse(changedAfterPr.stdout).code,'CANONICAL_SOURCE_CHANGED');
+
 // REFERENCE_IMAGE fixture: CURRENT registry + current image must align with design scope and sources.
 const refRoot=mkdtempSync(join(tmpdir(),'canonical-ui-reference-selftest-'));
 mkdirSync(join(refRoot,'docs','ui-reference','current'),{recursive:true});
@@ -136,4 +164,4 @@ const refStop=spawnSync(process.execPath,[gatePath,'--context-file',join(refRoot
 assert.equal(refStop.status,2);
 assert.equal(JSON.parse(refStop.stdout).code,'UI_REFERENCE_SCOPE_MISMATCH');
 
-console.log('CANONICAL_CONTRACT_GATE_SELFTEST=PASS cases=A,B,C,D,E,F,G ui_reference=PASS incident_fixture=STOP');
+console.log('CANONICAL_CONTRACT_GATE_SELFTEST=PASS contract=A-G canonical_update=A-D ui_reference=PASS incident_fixture=STOP');

@@ -18,11 +18,12 @@ const MAX_OUTPUT_BYTES = 256 * 1024;
 const DEFAULT_TIMEOUT_MS = 60000;
 const SAFE_SUBSCRIPTIONS = new Set(['pro']);
 // Claude Code binaries verified on ai-dev by isolated synthetic safe-route smoke.
-// 2.1.236: dev.55; 2.1.261: dev.106 re-attestation after the local CLI update.
+// 2.1.236: dev.55; 2.1.261: dev.106; 2.1.281: dev.121 re-attestation after local CLI updates.
 // Any other binary update fails closed until a new reviewed attestation is added.
 const TRUSTED_CLAUDE_SHA256 = new Set([
   '647E736F20C9FF0553C754624CBF8A6DCAC196E8595509D8F63DCE8BBE818757',
   'F2F5D1A155167488AEB32CD263E15436253C7B1681AE147C9E73E4D6BBC3C852',
+  '39BE063C2512B43347FE7B0AB18C46F1596141701C9C5FC895DDFCA9A051067C',
 ]);
 const UNSAFE_ENV_PREFIXES = ['ANTHROPIC_', 'CLAUDE_', 'AWS_', 'GOOGLE_', 'GCLOUD_', 'VERTEX_', 'AZURE_'];
 

@@ -2,4 +2,5 @@
 await import('./bounded-task-wait-selftest.mjs');
 await import('./turn-wait-budget-selftest.mjs');
 await import('./claude-job-selftest.mjs');
+await import('./claude-job-runtime-selftest.mjs');
 console.log('long-task-wait selftest: PASS');

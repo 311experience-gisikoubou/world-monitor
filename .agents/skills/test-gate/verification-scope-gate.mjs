@@ -38,6 +38,8 @@ const FRONTEND_DEPENDENCY_RE = /(^|\/)(package(?:-lock)?\.json|pnpm-lock\.yaml|y
 const BACKEND_DEPENDENCY_RE = /(^|\/)(Cargo\.(?:toml|lock)|pyproject\.toml|poetry\.lock|uv\.lock|requirements[^/]*\.txt|Pipfile(?:\.lock)?|go\.(?:mod|sum)|composer\.(?:json|lock)|pom\.xml|build\.gradle(?:\.kts)?|gradle\.lockfile)$/i;
 const MIGRATION_RE = /(^|\/)(migrations?|schema|database|db)(\/|$)|\.sql$/i;
 const FRONTEND_RE = /(^|\/)(src|app|web|frontend|ui|components?|pages?|views?|styles?)(\/|$).+\.(ts|tsx|js|jsx|mjs|cjs|vue|svelte|css|scss|sass|less|html)$/i;
+const ROOT_INDEX_HTML_RE = /^index\.html$/i;
+const FRONTEND_VERIFICATION_SCRIPT_RE = /^scripts\/(?=[^/]*\.(?:ts|js|mjs)$)(?=[^/]*(?:frontend|ui|browser|render|layout|visual|home-stage|home-invoice))(?=[^/]*(?:verify|verification|selftest|test|smoke|check|scale))[^/]+\.(?:ts|js|mjs)$/i;
 const BACKEND_RE = /(^|\/)(src-tauri|backend|server|api|services?|domain|repositories?)(\/|$)|\.(rs|go|py|java|kt|cs|rb|php)$/i;
 
 function unique(values) {
@@ -88,7 +90,7 @@ export function classifyFiles(changedFiles) {
       flags.backend = true;
       continue;
     }
-    if (FRONTEND_RE.test(file)) {
+    if (ROOT_INDEX_HTML_RE.test(file) || FRONTEND_VERIFICATION_SCRIPT_RE.test(file) || FRONTEND_RE.test(file)) {
       flags.frontend = true;
       continue;
     }

@@ -89,11 +89,23 @@ For Claude implementation work that can outlive the outer Remote Desktop Command
 - `run-claude-job.ps1` creates an isolated job worktree/branch and stays as the tracked worker process; a process manager such as Remote Desktop Commander returns control after initial output and later observes that same PID.
 - Model execution remains delegated to the existing `preflight-audit/implementation-orchestrator.mjs`; do not add a second raw-Claude route.
 - `check-claude-job.ps1` is read-only. `LONG_RUNNING` is a warning only; it never authorizes an automatic kill.
+- `check-claude-job.ps1` also reports `NO_PROGRESS_WARNING`, a read-only candidate signal derived only from the
+  newest last-write timestamp among a job's own existing evidence files (`status.json`, `orchestrator.json`,
+  `stderr.log`, `test.log`, `result.json`, `task.json`), configurable via `-NoProgressMinutes` (default 90). It is
+  honestly named: no file activity does not prove Claude is frozen, because the current qualified
+  `implementation-orchestrator.mjs` buffers provider stdout/stderr until the call completes. It is a candidate
+  for inspection only, never an automatic kill trigger.
 - Job logs live under ignored `.ai-jobs/`. Do not place protected real data, credentials, patient/clinic/billing data, or secrets in prompts/logs.
 - One repository has at most one active Claude job. A continuation reuses the same job worktree and checkpoints only already in-scope changes with a normal commit; out-of-scope changes stop continuation.
 - `DONE` is created only by the outer runner after the existing orchestrator, scope gate, and the supplied job-local test command pass. Claude prose is never completion evidence.
 - `READY_FOR_REVIEW` returns to the normal Foundation staged-reality/test-gate/final-PR flow; it is not merge authorization.
 - The provider process has a separate hard timeout ceiling of 360 minutes. The default 60-minute `LONG_RUNNING` threshold remains warning-only.
+- `stop-claude-job.ps1` is a separate, explicit, fail-closed manual stop for one named `-JobId`. It never accepts a
+  PID from the caller, only acts when the job is active and the recorded runner PID + process-start identity
+  exactly match a live process, and is never auto-invoked from `LONG_RUNNING`/`NO_PROGRESS_WARNING` or any timeout.
+- Bounded auto-retry: by default a Claude job runs the initial attempt plus at most 2 AI-owned auto retries. A retry happens only for an ordinary test-command failure while orchestrator, Claude result, and scope gates all PASS. Human-gate codes (`HUMAN_GATE_REQUIRED`, `WAITING_AT_VALID_HUMAN_GATE`, `HUMAN_CONFIRMATION_REQUIRED`), scope/Claude/orchestrator failure, test transport error, skipped/incomplete test, missing evidence, and a repeated failure fingerprint stop immediately.
+- Before each auto retry (only after the retry decision is retry=true), the runner commits the scope-PASS attempt changes on the same job branch and verifies the worktree is clean, because the orchestrator rejects dirty worktrees. If that fails it stops with `retry_stop_code=RETRY_CHECKPOINT_FAILED` and starts no further attempt. It never resets, force-pushes, merges, or writes main.
+- Manual `-ContinueJob` remains available after the final failure. The runner never auto-pushes, opens a PR, merges, or makes a human decision.
 
 See `claude-job/README.md` for the Windows entrypoints.
 

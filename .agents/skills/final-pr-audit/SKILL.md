@@ -41,6 +41,8 @@ Before checking merge readiness, identify where the audited change was actually 
 
 Before running any verification that `test-gate` already completed, check for a `VERIFICATION_EVIDENCE_V1` receipt produced by `.agents/skills/test-gate/verification-evidence-receipt.mjs`.
 
+For work governed by a Canonical Contract, first run the existing canonical gate at `PRE_FINAL_AUDIT` with the fingerprint recorded before implementation. Immediately before PR creation or any PR update, run it again at `PRE_PR`. Supply the current `canonicalSourceFingerprint` when verifying the evidence receipt. `CANONICAL_SOURCE_CHANGED`, `CANONICAL_SOURCE_FINGERPRINT_MISSING`, or `CURRENT_CANONICAL_SOURCE_FINGERPRINT_REQUIRED` invalidates stale test/screenshot/completion evidence; return to the latest canonical and minimum necessary revalidation rather than treating the PR or an older PASS as complete.
+
 - Verify it with current `baseSha`, current exact `headSha`, and the canonical current changed-file set.
 - `VERIFICATION_EVIDENCE_RECEIPT=REUSE` means the receipt-covered machine-observed results are identity-bound to this exact audited source and scope. Record them as reused; **do not execute the same checks again merely for final-audit ceremony**.
 - Continue final audit with properties the receipt does not prove: current PR metadata/state, merge-base/current live base as applicable, scope-outside changes, security review, PR-description consistency, Draft Lock, review/required-CI state, real-device status when distinct, and blockers.

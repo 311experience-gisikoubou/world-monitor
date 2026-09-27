@@ -18,6 +18,7 @@ param(
     [string[]]$ScopePaths,
     [string]$TestCommand,
     [ValidateRange(1,360)][int]$ProviderTimeoutMinutes = 360,
+    [ValidateRange(0,2)][int]$MaxAutoRetries = 2,
     [string]$BaseRef = 'origin/main',
     [switch]$ClearStaleLock
 )
@@ -191,6 +192,7 @@ try {
         worktree = $wtPath; branch = $branch; root_base_commit = $rootBase
         scope_paths = @($ScopePaths); test_command = $TestCommand
         provider_timeout_minutes = $ProviderTimeoutMinutes
+        max_auto_retries = [Math]::Min(2, $MaxAutoRetries); attempt = 0; auto_retries_used = 0; retry_stop_code = $null
         started_at = (Get-Date).ToString('o'); runner_pid = $null
     }
     Save-Json $status (Join-Path $jobDir 'status.json')

@@ -5,6 +5,8 @@ import { issueReceipt, verifyReceipt } from './verification-evidence-receipt.mjs
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
 const C = 'c'.repeat(40);
+const F1 = '1'.repeat(64);
+const F2 = '2'.repeat(64);
 
 const issueInput = {
   schemaVersion: 1,
@@ -14,6 +16,7 @@ const issueInput = {
   changedFiles: ['.agents/skills/test-gate/SKILL.md', 'VERSION'],
   profile: 'GOVERNANCE_ONLY',
   scopeDecision: 'PROCEED',
+  canonicalSourceFingerprint: F1,
   plannedChecks: ['DIFF_HYGIENE', 'TARGETED_SELFTEST', 'DOCS_CONSISTENCY'],
   results: [
     { check: 'TARGETED_SELFTEST', status: 'success', evidenceSource: 'local' },
@@ -33,11 +36,42 @@ const verified = verifyReceipt({
   schemaVersion: 1,
   mode: 'verify',
   receipt: issued.receipt,
-  current: { baseSha: A, headSha: B, changedFiles: [...issueInput.changedFiles].reverse() },
+  current: { baseSha: A, headSha: B, changedFiles: [...issueInput.changedFiles].reverse(), canonicalSourceFingerprint: F1 },
 });
 assert.equal(verified.pass, true);
 assert.equal(verified.decision, 'REUSE');
 assert.deepEqual(verified.reusableChecks, [...issueInput.plannedChecks].sort());
+assert.equal(verified.canonicalSourceFingerprint, F1);
+
+const canonicalDrift = verifyReceipt({
+  schemaVersion: 1,
+  mode: 'verify',
+  receipt: issued.receipt,
+  current: { baseSha: A, headSha: B, changedFiles: issueInput.changedFiles, canonicalSourceFingerprint: F2 },
+});
+assert.equal(canonicalDrift.code, 'CANONICAL_SOURCE_CHANGED');
+assert(canonicalDrift.detail.invalidatedEvidence.includes('VERIFICATION_RESULTS'));
+assert(canonicalDrift.detail.invalidatedEvidence.includes('SCREENSHOTS'));
+assert(canonicalDrift.detail.invalidatedEvidence.includes('COMPLETION_PASS'));
+
+const missingCurrentCanonical = verifyReceipt({
+  schemaVersion: 1,
+  mode: 'verify',
+  receipt: issued.receipt,
+  current: { baseSha: A, headSha: B, changedFiles: issueInput.changedFiles },
+});
+assert.equal(missingCurrentCanonical.code, 'CURRENT_CANONICAL_SOURCE_FINGERPRINT_REQUIRED');
+
+const legacyInput = structuredClone(issueInput);
+delete legacyInput.canonicalSourceFingerprint;
+const legacyReceipt = issueReceipt(legacyInput).receipt;
+const legacyAgainstCanonical = verifyReceipt({
+  schemaVersion: 1,
+  mode: 'verify',
+  receipt: legacyReceipt,
+  current: { baseSha: A, headSha: B, changedFiles: issueInput.changedFiles, canonicalSourceFingerprint: F1 },
+});
+assert.equal(legacyAgainstCanonical.code, 'CANONICAL_SOURCE_FINGERPRINT_MISSING');
 
 assert.equal(verifyReceipt({
   schemaVersion: 1, mode: 'verify', receipt: issued.receipt,

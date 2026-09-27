@@ -81,4 +81,53 @@ result = evaluate({
 });
 assert.equal(result.code, 'CHANGE_SCOPE_UNKNOWN');
 
+// Root index.html is frontend; unrelated scripts/*.ts is not classified as frontend.
+assert.equal(classifyFiles(['index.html']).profile, 'FRONTEND_ONLY');
+assert.equal(classifyFiles(['scripts/build-release.ts']).profile, 'UNKNOWN');
+
+// Narrow frontend-verification-script predicate.
+assert.equal(classifyFiles(['scripts/home-stage-scale.selftest.ts']).profile, 'FRONTEND_ONLY');
+assert.equal(classifyFiles(['scripts/home-invoice-pending.selftest.ts']).profile, 'FRONTEND_ONLY');
+assert.equal(classifyFiles(['scripts/ui-layout-smoke.check.js']).profile, 'FRONTEND_ONLY');
+
+// Required PASS selftest: index.html + src file + frontend-verification-script => FRONTEND_ONLY, PROCEED.
+result = evaluate({
+  changedFiles: ['index.html', 'src/home.ts', 'scripts/home-stage-scale.selftest.ts'],
+  plannedChecks: ['DIFF_HYGIENE', 'TARGETED_SELFTEST', 'FRONTEND_BUILD'],
+});
+assert.equal(result.profile, 'FRONTEND_ONLY');
+assert.equal(result.decision, 'PROCEED');
+
+// Negative: unknown extension with no clear purpose/semantics stays UNKNOWN/STOP.
+result = evaluate({
+  changedFiles: ['weird/file.xyz'],
+  plannedChecks: ['DIFF_HYGIENE'],
+});
+assert.equal(result.decision, 'STOP');
+assert.equal(result.code, 'CHANGE_SCOPE_UNKNOWN');
+
+// Negative: migration change is DB_MIGRATION, not frontend-only, even alongside frontend files.
+result = evaluate({
+  changedFiles: ['migrations/0010_add_column.sql', 'src/home.ts'],
+  plannedChecks: ['DIFF_HYGIENE', 'BACKEND_FULL_TEST', 'MIGRATION_TEST'],
+});
+assert.equal(result.profile, 'DB_MIGRATION');
+assert.notEqual(result.profile, 'FRONTEND_ONLY');
+
+// Negative: backend change is BACKEND_ONLY, not frontend-only.
+result = evaluate({
+  changedFiles: ['src-tauri/src/lib.rs'],
+  plannedChecks: ['DIFF_HYGIENE', 'BACKEND_FULL_TEST'],
+});
+assert.equal(result.profile, 'BACKEND_ONLY');
+assert.notEqual(result.profile, 'FRONTEND_ONLY');
+
+// Negative: dependency change is DEPENDENCY_CHANGE, not frontend-only, even with frontend deps.
+result = evaluate({
+  changedFiles: ['package-lock.json'],
+  plannedChecks: ['DIFF_HYGIENE', 'TARGETED_SELFTEST', 'FRONTEND_BUILD', 'DEPENDENCY_AUDIT'],
+});
+assert.equal(result.profile, 'DEPENDENCY_CHANGE');
+assert.notEqual(result.profile, 'FRONTEND_ONLY');
+
 console.log('verification-scope-gate selftest: PASS');

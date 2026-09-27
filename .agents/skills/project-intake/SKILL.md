@@ -32,6 +32,9 @@ short user intent
 - Use the closed schema in `templates/project-brief.json`.
 - `assumptions` is always present. Use `[]` when none are needed; never hide an AI assumption outside the field.
 - `humanQuestions` contains only unresolved human value/specification questions and is limited to 3.
+- `solutionReview` is required: 1-3 `options`, each with a `decision` of `REUSE_EXISTING` / `SIMPLIFY_EXISTING` / `MINIMAL_CHANGE` / `EXTEND_REQUIRED`, and an `assessment` covering all seven criteria (safety, accuracy, simplicity, humanOperations, maintenance, reversibility, existingOverlap). `selectedOptionId` is the single recommended option. Prefer reuse/simplify/minimal change over adding new Skills, gates, routers, or schemas.
+- `extendRationale` is required (why existing mechanisms are insufficient) only when the selected option is `EXTEND_REQUIRED`; otherwise it must be `null`.
+- The selected `solutionReview` is carried into the task packet; downstream gates still own their own checks.
 - `APPROVED` requires zero unresolved human questions plus a matching `CONFIRMED` / `EXPLICIT_HUMAN` Human Decision Sync record.
 - The approval topic is deterministic: `project-intake:<intakeId>`.
 - Patient, clinic, billing, sales, credential, or other protected real data must not be copied into the brief.

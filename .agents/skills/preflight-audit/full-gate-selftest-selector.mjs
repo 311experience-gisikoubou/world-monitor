@@ -3,12 +3,13 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { parseInput, validateEvidence } from './fast-path-classifier.mjs';
 
-const CORE = ['merge-authorization','merge-execution','fast-path','security-preflight','full-gate-selector'];
+const CORE = ['fast-path','security-preflight','full-gate-selector'];
 const ALL = [
   'merge-authorization','merge-execution','merge-execution-batch','merge-executor','foundation-sync','foundation-bootstrap','foundation-update','foundation-remote-plan','foundation-batch-rollout',
   'project-context','project-memory','common-rule-health','portfolio-governance','live-base-ref','work-start','ai-capacity','ai-provider-inventory','ai-task-router','claude-runner','fast-path','operation-preflight','actions-cost',
   'provider-qualification','provider-readiness','security-history','security-preflight','stagnation','wip-observer','portfolio-health','long-task-wait','merge-readiness','real-device',
   'implementation-runner','implementation-route-receipt','implementation-orchestrator',
+  'verification-scope','legacy-implementation-audit',
   'full-gate-selector',
 ];
 const COMMANDS = {
@@ -47,6 +48,8 @@ const COMMANDS = {
   'implementation-runner':['node','.agents/skills/preflight-audit/implementation-runner-selftest.mjs','.agents/skills/preflight-audit/implementation-runner.mjs'],
   'implementation-route-receipt':['node','.agents/skills/preflight-audit/implementation-route-receipt-selftest.mjs','.agents/skills/preflight-audit/implementation-route-receipt.mjs'],
   'implementation-orchestrator':['node','.agents/skills/preflight-audit/implementation-orchestrator-selftest.mjs','.agents/skills/preflight-audit/implementation-orchestrator.mjs'],
+  'verification-scope':['node','.agents/skills/test-gate/verification-scope-gate-selftest.mjs'],
+  'legacy-implementation-audit':['node','.agents/skills/preflight-audit/legacy-implementation-audit-selftest.mjs','.agents/skills/preflight-audit/legacy-implementation-audit.mjs'],
   'full-gate-selector':['node','.agents/skills/preflight-audit/full-gate-selftest-selector-selftest.mjs','.agents/skills/preflight-audit/full-gate-selftest-selector.mjs'],
 };
 const GROUPS = {
@@ -65,12 +68,17 @@ const GROUPS = {
   'portfolio-health':['portfolio-health'],
   'long-task-wait':['long-task-wait','stagnation'],
   'merge-readiness':['merge-readiness'],
-  'merge-execution-batch':['merge-execution-batch'],
+  'merge-execution-batch':['merge-execution','merge-execution-batch'],
   'real-device':['real-device'],
   'ai-capacity':['ai-capacity'],
   'ai-routing':['ai-provider-inventory','ai-task-router','provider-qualification','provider-readiness'],
   'implementation-routing':['implementation-runner','implementation-route-receipt','implementation-orchestrator','ai-provider-inventory','ai-task-router','provider-qualification','provider-readiness'],
   'foundation-sync':['foundation-sync','foundation-bootstrap','foundation-update','foundation-remote-plan','foundation-batch-rollout'],
+  'verification-scope':['verification-scope'],
+  'legacy-audit':['legacy-implementation-audit','implementation-route-receipt'],
+  'instruction-doc':['common-rule-health'],
+  'merge-control-doc':['common-rule-health','merge-authorization','merge-execution'],
+  'handoff-doc':['common-rule-health','project-context','project-memory'],
 };
 function pair(path, dir, stem) {
   return path === `${dir}/${stem}.mjs` || path === `${dir}/${stem}-selftest.mjs`;
@@ -78,8 +86,10 @@ function pair(path, dir, stem) {
 function isNeutral(path) {
   return path === 'CHANGELOG.md' || path === 'VERSION';
 }
+function isMetadataOnly(changedFiles) {
+  return changedFiles.length > 0 && changedFiles.every(isNeutral);
+}
 function isHighCoupling(path) {
-  if (/^\.agents\/skills\/[^/]+\/SKILL\.md$/.test(path)) return true;
   return pair(path,'.agents/skills/preflight-audit','full-gate-selftest-selector') ||
     pair(path,'.agents/skills/preflight-audit','fast-path-classifier') ||
     pair(path,'.agents/skills/final-pr-audit','merge-authorization-gate') ||
@@ -111,6 +121,11 @@ function familyFor(path) {
   if (['ai-provider-inventory','ai-task-router','provider-adapter-qualification','provider-adapter-readiness'].some(stem => pair(path,pre,stem))) return 'ai-routing';
   if (['implementation-runner','implementation-route-receipt','implementation-orchestrator'].some(stem => pair(path,pre,stem))) return 'implementation-routing';
   if (['foundation-sync-audit','foundation-bootstrap','foundation-update','foundation-remote-update-plan','foundation-batch-rollout-plan'].some(stem => pair(path,foundation,stem))) return 'foundation-sync';
+  if (pair(path,'.agents/skills/test-gate','verification-scope-gate')) return 'verification-scope';
+  if (pair(path,pre,'legacy-implementation-audit')) return 'legacy-audit';
+  if (path === '.agents/skills/final-pr-audit/SKILL.md') return 'merge-control-doc';
+  if (path === '.agents/skills/handoff/SKILL.md') return 'handoff-doc';
+  if (/^\.agents\/skills\/[^/]+\/SKILL\.md$/.test(path)) return 'instruction-doc';
   return null;
 }
 function ordered(ids) {
@@ -120,14 +135,25 @@ function ordered(ids) {
 function commandsFor(ids) {
   return ids.map(id => ({ id, argv: [...COMMANDS[id]] }));
 }
+function withObservability(result) {
+  const fullSuiteTestCount = ALL.length;
+  const selectedTestCount = result.selectedTests.length;
+  const raw = fullSuiteTestCount > 0 ? ((fullSuiteTestCount - selectedTestCount) / fullSuiteTestCount) * 100 : 0;
+  const reductionPercent = Math.min(100, Math.max(0, Math.round(raw)));
+  return { ...result, selectedTestCount, fullSuiteTestCount, reductionPercent };
+}
 function fullSuite(reason, evidenceValid = true) {
-  return { schemaVersion:1, evidenceValid, selection:'FULL_SUITE', reasons:[reason], selectedTests:[...ALL], commands:commandsFor(ALL) };
+  return withObservability({ schemaVersion:1, evidenceValid, selection:'FULL_SUITE', reasons:[reason], selectedTests:[...ALL], commands:commandsFor(ALL) });
+}
+function metadataOnly() {
+  return withObservability({ schemaVersion:1, evidenceValid:true, selection:'METADATA_ONLY', reasons:['METADATA_ONLY_NO_EXECUTABLE_SELFTEST_REQUIRED'], selectedTests:[], commands:[] });
 }
 export function selectSelftests(evidence) {
   const validationError = validateEvidence(evidence);
   if (validationError) return fullSuite(validationError, false);
   if (!evidence.evidenceComplete) return fullSuite('EVIDENCE_INCOMPLETE');
   if (Object.values(evidence.impacts).some(Boolean)) return fullSuite('DECLARED_IMPACT_REQUIRES_FULL_SUITE');
+  if (isMetadataOnly(evidence.changedFiles)) return metadataOnly();
 
   const families = new Set();
   let mappedImplementationCount = 0;
@@ -143,14 +169,14 @@ export function selectSelftests(evidence) {
   const selected = new Set(CORE);
   for (const family of families) for (const test of GROUPS[family]) selected.add(test);
   const selectedTests = ordered(selected);
-  return {
+  return withObservability({
     schemaVersion:1,
     evidenceValid:true,
     selection:'IMPACT_SCOPED',
     reasons:[...families].sort().map(name => `IMPACT_FAMILY_${name.toUpperCase().replaceAll('-', '_')}`),
     selectedTests,
     commands:commandsFor(selectedTests),
-  };
+  });
 }
 function cliError(argv) {
   if (argv.length === 0) return null;
