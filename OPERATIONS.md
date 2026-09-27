@@ -223,6 +223,13 @@ The foundation does not require an always-on hourly GitHub Actions schedule in e
 - 根本原因の修正自体が高リスク・破壊的・本番影響を伴う場合は、人間確認を取る。
 - 人間にGit操作・test実行・SHA比較・PR監査等の安全な定型作業を繰り返し手作業させない。
 
+## RDC Process Hygiene
+
+- Remote Desktop Commander の one-shot コマンドはシェル層を1つにする。必要でない限り、PowerShell の中で `powershell -Command` を入れ子にしない。
+- one-shot セッションが実際に終了したことを確認する（残留プロセスを放置しない）。
+- 意図的に起動した長寿命の dev server / tunnel は自動 kill しない。
+- ローカル運用シミュレーションは `tools/run-local-ops-simulation.ps1` をオンデマンドで実行する（実 Claude・GitHub 書き込み・merge・scheduled task を使わない）。
+
 ## Anti-Loop
 
 同系統の失敗を2回した場合の停止基準は`learnings/L-0004.md`を参照する。ここでは複製しない。

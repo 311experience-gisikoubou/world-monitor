@@ -54,6 +54,10 @@ The contract records CURRENT, SUPERSEDED, HISTORICAL, and DRAFT artifacts by sta
 
 At ordinary turn-start, `project-context-guard.mjs --turn-start` validates the Contract and its committed CURRENT sources automatically. Normal aligned work continues without a human confirmation. Contract conflicts are technical STOPs for AI-owned correction unless the conflict represents a genuine unresolved human specification decision.
 
+For any task that actively uses canonical sources, the same `canonical-contract-gate.mjs` also binds work to a SHA-256 `canonicalSourceFingerprint` computed from the normalized CURRENT contract plus the actual CURRENT source-file bytes in the active workspace. This is a checkpoint extension of the existing gate, not a watcher or resident service.
+
+Required checkpoints are `PRE_IMPLEMENTATION`, `PRE_ARTIFACT`, `PRE_FINAL_AUDIT`, and `PRE_PR`. Only the first records a new baseline without a prior fingerprint; every later checkpoint requires the prior fingerprint. A mismatch returns `CANONICAL_SOURCE_CHANGED` and invalidates earlier verification results, screenshots, and completion PASS. The recovery route is latest canonical -> implementation diff -> necessary fixes only -> retest -> regenerate screenshots -> final-pr-audit. An unrelated file change does not affect the fingerprint because non-canonical paths are not hashed. A newer file is not authority merely because it exists: it participates only when the existing Canonical Contract marks it CURRENT.
+
 ## Approved UI Reference Authority
 
 This rule is dormant unless a human explicitly adopts a UI image as the design baseline. Non-UI projects and projects without an approved image do not need a UI-reference folder.

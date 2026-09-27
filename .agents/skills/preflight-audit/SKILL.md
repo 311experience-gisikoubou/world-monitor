@@ -250,6 +250,28 @@ node .agents/skills/preflight-audit/implementation-route-receipt-selftest.mjs .a
 node .agents/skills/preflight-audit/implementation-orchestrator-selftest.mjs .agents/skills/preflight-audit/implementation-orchestrator.mjs
 ```
 
+### Legacy implementation audit (rescue-only, fail-closed)
+
+`.agents/skills/preflight-audit/legacy-implementation-audit.mjs` exists only to rescue-audit implementation work that was genuinely completed **before this file existed**. It is not a second normal route: new work always uses `implementation-orchestrator.mjs` -> `implementation-runner.mjs` -> `implementation-route-receipt.mjs`. This module never produces normal `executionEvidence`, never marks an `implementation-route-receipt` "verified", and never widens or substitutes for the normal path.
+
+```text
+node .agents/skills/preflight-audit/legacy-implementation-audit.mjs --input <legacy-audit-input.json> --pretty
+```
+
+- Output identity is closed: `schema: "LEGACY_IMPLEMENTATION_AUDIT_V1"`, `result: PROCEED | STOP`, and `evidenceNature: "LEGACY_CORROBORATION_NOT_RUNNER_ATTESTATION"` on every response.
+- A hard-coded `LEGACY_ELIGIBILITY_CUTOFF_UTC` (this feature's own introduction time) bounds eligibility. Every audited implementation commit's own committer timestamp must be at or before that cutoff **and** inside the caller-declared `implementationWindow`; a commit after the cutoff is `COMMIT_AFTER_CUTOFF`, never treated as legacy. New work after the cutoff MUST use the normal orchestrator/runner/receipt path instead of this audit.
+- `legacyReason` is a closed allowlist (`PRE_RECEIPT_WORK`, `NORMAL_ENTRY_MISSED_BEFORE_ENFORCEMENT`) and `implementationAI` must be exactly `claude-cli`. `main`/`master`/`trunk` branches are rejected.
+- Repository/branch/HEAD/base/scope facts are machine-derived, never taken on the caller's word: a real clean Git worktree, exact branch and `expectedHead`, the actual GitHub `origin` owner/name, `baseHead` as a genuine ancestor, and `git diff`/`git rev-list` derived `changedPaths`/commits inside `allowedScope` and outside `forbiddenScope`.
+- Claude corroboration comes only from explicit `claudeEvidenceFiles` (bounded size, SHA-256 hashed, optional `expectedEvidenceSha256` tamper check) — never from an automatic scan of arbitrary local history. Each JSONL line must parse; a genuine Claude assistant `tool_use` must edit a changed path; every audited commit must be bound to a Claude `Bash` `git commit` `tool_use` plus a matching `tool_result` containing that exact commit SHA in the same session/cwd/branch. An abbreviated Git ID (hex, >=7 and <40 chars) in the `tool_result` is accepted only when the audited full SHA starts with it AND Git in the audited repository resolves `<token>^{commit}` to exactly that 40-character commit; prefix strings alone are never trusted, and shorter, wrong, ambiguous/unresolvable, non-commit, or other-commit tokens do not bind.
+- Evidence is screened for safety: known secret/credential/browser-profile/auth-store paths are rejected, filesystem paths outside the repository must be covered by an explicit `allowedSyntheticEvidenceRoots` entry, and non-loopback network access (anything other than the same GitHub origin or `localhost`/`127.0.0.1`) is rejected. An ambiguous command fails closed rather than being guessed safe.
+- `currentHeadVerifications` (`testGate`, `canonicalContract`, `humanDecisionSync`, `finalRealityCheck`) must already be caller-provided `PASS` results at the exact `expectedHead`; this module only binds and echoes their normalized status/head, it does not fabricate them.
+
+Self-test:
+
+```text
+node .agents/skills/preflight-audit/legacy-implementation-audit-selftest.mjs .agents/skills/preflight-audit/legacy-implementation-audit.mjs
+```
+
 ## Execution / Evidence Location
 
 Before repository checks, identify where the proposed or audited change actually exists.
@@ -374,11 +396,14 @@ When the classifier returns `FULL_GATE`, reuse the **same change-evidence JSON**
 ```
 
 - This does not downgrade Full Gate. It only chooses which Foundation selftests are relevant to the touched governance components. Independent review, lifecycle/value gates, security boundaries, WIP control, diff checking, and merge authorization keep their own triggers.
-- `IMPACT_SCOPED` always includes the merge-authorization, merge-execution, Fast Path classifier, security-preflight, and selector selftests, plus the mapped impacted family. The output includes fixed machine-readable `commands` so callers do not reconstruct test invocations.
-- Unknown governance paths, selector changes, Fast Path classifier changes, merge-control code/instructions, any `.agents/skills/*/SKILL.md` change, or any declared impact flag set to `true` fail closed to `FULL_SUITE`. Skill instructions are governance code and never self-authorize a narrow suite, even when mixed with otherwise mapped implementation paths. Incomplete evidence also uses the full suite; malformed evidence exits non-zero.
-- `CHANGELOG.md` and `VERSION` are neutral only when accompanied by at least one mapped implementation/test path. Metadata-only governance changes do not self-authorize a narrow suite.
+- `IMPACT_SCOPED` always includes the Fast Path classifier, security-preflight, and selector selftests (CORE), plus the mapped impacted family. `merge-authorization` and `merge-execution` are no longer part of the always-on CORE; they are still selected whenever the touched family actually concerns merge execution/authorization (merge-control code, merge-control docs, batch merge-execution, etc.), and they remain part of `FULL_SUITE`. The output includes fixed machine-readable `commands` so callers do not reconstruct test invocations.
+- `verification-scope` and `legacy-audit` are first-class selector families: changes to `verification-scope-gate.mjs`/`-selftest.mjs` select only `verification-scope` on top of CORE; changes to `legacy-implementation-audit.mjs`/`-selftest.mjs` select `legacy-implementation-audit` plus `implementation-route-receipt` on top of CORE.
+- `.agents/skills/*/SKILL.md` changes are no longer a blanket high-coupling trigger. Instruction-only skill documentation is scoped by family instead, because running the unrelated executable selftests does not validate prose: a generic `SKILL.md` selects `common-rule-health`; `.agents/skills/final-pr-audit/SKILL.md` selects `common-rule-health` + `merge-authorization` + `merge-execution`; `.agents/skills/handoff/SKILL.md` selects `common-rule-health` + `project-context` + `project-memory`. Actual selector code (`full-gate-selftest-selector.mjs`, `fast-path-classifier.mjs`) and actual merge authority/execution code remain high-coupling and fail closed to `FULL_SUITE`.
+- Unknown governance paths, selector changes, Fast Path classifier changes, merge-control code, or any declared impact flag set to `true` fail closed to `FULL_SUITE`. Incomplete evidence also uses the full suite; malformed evidence exits non-zero.
+- A `changedFiles` set consisting solely of `CHANGELOG.md` and/or `VERSION` returns a distinct `METADATA_ONLY` selection (`evidenceValid:true`, zero `selectedTests`/`commands`, reason `METADATA_ONLY_NO_EXECUTABLE_SELFTEST_REQUIRED`) instead of `FULL_SUITE`, because no executable selftest validates a version bump or changelog entry. This does not bypass diff hygiene or final audit; it only says no executable selftest is warranted. `CHANGELOG.md`/`VERSION` mixed with at least one mapped implementation/test path remain neutral within an otherwise `IMPACT_SCOPED` selection.
+- Every result carries observability fields: `selectedTestCount`, `fullSuiteTestCount`, and `reductionPercent` (rounded percentage reduction vs the full suite, clamped 0..100; `FULL_SUITE` is always 0, `METADATA_ONLY` is always 100).
 - There is no diff-size threshold. Measured runtime is optimization evidence, never a safety classifier.
-- On the 2026-09-09 baseline, the 20-test pre-selector suite measured 83.9s. An operation-preflight-only example selected 6 tests and measured 8.4s; these are observations, not promised runtimes.
+- On the 2026-09-09 baseline, the 20-test pre-selector suite measured 83.9s. An operation-preflight-only example selected 6 tests and measured 8.4s; these are observations, not promised runtimes. The narrower CORE further reduces routine `IMPACT_SCOPED` selections; see the selector selftest for the current measured counts.
 
 Selector self-test:
 

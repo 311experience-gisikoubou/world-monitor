@@ -12,6 +12,8 @@ const KINDS = new Set(['PROJECT','BUSINESS','DESIGN','SECURITY','WORKFLOW','GOVE
 const BASELINES = new Set(['MACHINE_READABLE','REFERENCE_IMAGE']);
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,159}$/;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const SHA256_RE = /^[0-9a-f]{64}$/;
+const CANONICAL_CHECKPOINTS = new Set(['PRE_IMPLEMENTATION','PRE_ARTIFACT','PRE_FINAL_AUDIT','PRE_PR']);
 
 function isObject(v){return Boolean(v)&&typeof v==='object'&&!Array.isArray(v);}
 function cleanText(v,max=500){return typeof v==='string'&&v===v.trim()&&v.length>0&&v.length<=max&&!/[\u0000-\u001f\u007f]/u.test(v)?v:null;}
@@ -69,6 +71,24 @@ export function normalizeCanonicalContract(manifest){
 
 export function canonicalContractFingerprint(contract){
   return createHash('sha256').update(JSON.stringify(contract)).digest('hex');
+}
+
+export function canonicalSourceFingerprint(contextFile,manifest){
+  const n=normalizeCanonicalContract(manifest);if(n.error)return n.error;
+  const root=dirname(resolve(contextFile));
+  const rows=[];
+  const current=n.value.artifacts.filter(x=>x.status==='CURRENT').sort((a,b)=>a.slot.localeCompare(b.slot)||a.id.localeCompare(b.id));
+  for(const artifact of current){
+    for(const source of [...artifact.sources].sort()){
+      let bytes;
+      try{bytes=readFileSync(resolve(root,source));}
+      catch{return stop('CANONICAL_SOURCE_WORKTREE_MISSING','A CURRENT canonical source is not readable from the active workspace.',{artifactId:artifact.id,source});}
+      rows.push({slot:artifact.slot,artifactId:artifact.id,source,sha256:createHash('sha256').update(bytes).digest('hex')});
+    }
+  }
+  const contractFingerprint=canonicalContractFingerprint(n.value);
+  const canonicalSourceFingerprint=createHash('sha256').update(JSON.stringify({contractFingerprint,sources:rows})).digest('hex');
+  return pass({repository:n.value.repository,contractId:n.value.contractId,contractVersion:n.value.contractVersion,contractFingerprint,canonicalSourceFingerprint,canonicalSourceCount:rows.length});
 }
 
 export function validateCanonicalContract(manifest,stateInput=null){
@@ -133,19 +153,40 @@ export function verifyCanonicalSources(contextFile,manifest){
     if(r.error||r.status!==0||!String(r.stdout??'').includes('\t'+source+'\0'))return stop('CANONICAL_SOURCE_MISSING','A CURRENT canonical source is not present as a file in Git HEAD.',{artifactId:a.id,source});
   }
   const ui=verifyUiReferenceSources(root,n.value);if(ui.result==='STOP')return ui;
-  return pass({repository:n.value.repository,contractId:n.value.contractId,contractVersion:n.value.contractVersion,contractFingerprint:canonicalContractFingerprint(n.value),uiReferenceConfigured:ui.uiReferenceConfigured===true,uiReferenceCount:ui.uiReferenceCount??0});
+  const sourceState=canonicalSourceFingerprint(contextFile,manifest);if(sourceState.result==='STOP')return sourceState;
+  return pass({repository:n.value.repository,contractId:n.value.contractId,contractVersion:n.value.contractVersion,contractFingerprint:sourceState.contractFingerprint,canonicalSourceFingerprint:sourceState.canonicalSourceFingerprint,canonicalSourceCount:sourceState.canonicalSourceCount,uiReferenceConfigured:ui.uiReferenceConfigured===true,uiReferenceCount:ui.uiReferenceCount??0});
+}
+
+export function verifyCanonicalCheckpoint(contextFile,manifest,{checkpoint='PRE_IMPLEMENTATION',expectedSourceFingerprint=null}={}){
+  if(!CANONICAL_CHECKPOINTS.has(checkpoint))return stop('CANONICAL_CHECKPOINT_INVALID','Canonical checkpoint is invalid.',{checkpoint});
+  if(expectedSourceFingerprint!==null&&(!cleanText(expectedSourceFingerprint,64)||!SHA256_RE.test(expectedSourceFingerprint)))return stop('CANONICAL_EXPECTED_FINGERPRINT_INVALID','Expected canonical source fingerprint must be a SHA-256 value.',{checkpoint});
+  if(checkpoint!=='PRE_IMPLEMENTATION'&&expectedSourceFingerprint===null)return stop('CANONICAL_EXPECTED_FINGERPRINT_REQUIRED','A prior canonical source fingerprint is required after implementation begins.',{checkpoint});
+  const current=verifyCanonicalSources(contextFile,manifest);if(current.result==='STOP')return current;
+  if(expectedSourceFingerprint!==null&&expectedSourceFingerprint!==current.canonicalSourceFingerprint){
+    return stop('CANONICAL_SOURCE_CHANGED','The CURRENT canonical source content changed after the prior checkpoint.',{
+      checkpoint,
+      expectedCanonicalSourceFingerprint:expectedSourceFingerprint,
+      currentCanonicalSourceFingerprint:current.canonicalSourceFingerprint,
+      staleEvidenceInvalidated:true,
+      invalidatedEvidence:['VERIFICATION_RESULTS','SCREENSHOTS','COMPLETION_PASS'],
+      requiredRoute:['LATEST_CANONICAL','IMPLEMENTATION_DIFF','NECESSARY_FIXES_ONLY','RETEST','REGENERATE_SCREENSHOTS','FINAL_PR_AUDIT'],
+    });
+  }
+  return pass({...current,checkpoint,canonicalUnchanged:expectedSourceFingerprint!==null,baselineRecorded:expectedSourceFingerprint===null});
 }
 
 function readArg(args,name){const i=args.indexOf(name);if(i<0)return null;if(!args[i+1])throw new Error(name+'_VALUE_REQUIRED');return args[i+1];}
 async function main(){
   try{
-    const args=process.argv.slice(2),contextFile=readArg(args,'--context-file'),stateJson=readArg(args,'--state-json'),stateFile=readArg(args,'--state-file'),pretty=args.includes('--pretty');
-    const allowed=new Set(['--context-file','--state-json','--state-file','--pretty']);for(let i=0;i<args.length;i++){if(!allowed.has(args[i]))throw new Error('ARGUMENT_INVALID');if(args[i]!=='--pretty')i++;}
-    if(!contextFile||(stateJson&&stateFile))throw new Error('ARGUMENT_INVALID');
-    const manifest=JSON.parse(readFileSync(resolve(contextFile),'utf8'));const sources=verifyCanonicalSources(contextFile,manifest);if(sources.result==='STOP'){console.log(JSON.stringify(sources,null,pretty?2:0));process.exitCode=2;return;}
+    const args=process.argv.slice(2),contextFile=readArg(args,'--context-file'),stateJson=readArg(args,'--state-json'),stateFile=readArg(args,'--state-file'),checkpoint=readArg(args,'--checkpoint'),expectedSourceFingerprint=readArg(args,'--expected-source-fingerprint'),pretty=args.includes('--pretty');
+    const allowed=new Set(['--context-file','--state-json','--state-file','--checkpoint','--expected-source-fingerprint','--pretty']);for(let i=0;i<args.length;i++){if(!allowed.has(args[i]))throw new Error('ARGUMENT_INVALID');if(args[i]!=='--pretty')i++;}
+    if(!contextFile||(stateJson&&stateFile)||(expectedSourceFingerprint&&!checkpoint))throw new Error('ARGUMENT_INVALID');
+    const manifest=JSON.parse(readFileSync(resolve(contextFile),'utf8'));
+    const sources=checkpoint?verifyCanonicalCheckpoint(contextFile,manifest,{checkpoint,expectedSourceFingerprint}):verifyCanonicalSources(contextFile,manifest);
+    if(sources.result==='STOP'){console.log(JSON.stringify(sources,null,pretty?2:0));process.exitCode=2;return;}
     const state=stateJson?JSON.parse(stateJson):stateFile?JSON.parse(readFileSync(resolve(stateFile),'utf8')):null;
     const result=validateCanonicalContract(manifest,state);
-    const output=result.result==='PROCEED'?{...result,uiReferenceConfigured:sources.uiReferenceConfigured===true,uiReferenceCount:sources.uiReferenceCount??0}:result;
+    const output=result.result==='PROCEED'?{...result,canonicalSourceFingerprint:sources.canonicalSourceFingerprint,canonicalSourceCount:sources.canonicalSourceCount??0,checkpoint:sources.checkpoint??null,canonicalUnchanged:sources.canonicalUnchanged??null,baselineRecorded:sources.baselineRecorded??null,uiReferenceConfigured:sources.uiReferenceConfigured===true,uiReferenceCount:sources.uiReferenceCount??0}:result;
     console.log(JSON.stringify(output,null,pretty?2:0));if(result.result==='STOP')process.exitCode=2;
   }catch(e){console.log(JSON.stringify(stop('CANONICAL_CONTRACT_GATE_ERROR',e?.message||'unknown error'),null,2));process.exitCode=2;}
 }

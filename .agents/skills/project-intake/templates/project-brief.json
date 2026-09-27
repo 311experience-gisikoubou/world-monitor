@@ -5,6 +5,26 @@
   "scope": "Describe what is in scope and what is explicitly excluded.",
   "assumptions": [],
   "humanQuestions": [],
+  "solutionReview": {
+    "options": [
+      {
+        "id": "option-a",
+        "decision": "REUSE_EXISTING",
+        "summary": "Recommended: reuse an existing Skill/gate/script as-is.",
+        "assessment": {
+          "safety": "State the safety impact.",
+          "accuracy": "State the accuracy impact.",
+          "simplicity": "State the simplicity impact.",
+          "humanOperations": "State the human operation burden.",
+          "maintenance": "State the maintenance burden.",
+          "reversibility": "State how to roll back.",
+          "existingOverlap": "State overlap with existing mechanisms."
+        }
+      }
+    ],
+    "selectedOptionId": "option-a",
+    "extendRationale": null
+  },
   "riskSignals": {
     "protectedOrPatientData": false,
     "externalCommunication": false,

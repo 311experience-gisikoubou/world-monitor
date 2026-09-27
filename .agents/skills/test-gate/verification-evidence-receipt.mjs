@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const SHA_RE = /^[0-9a-f]{40}$/;
+const SHA256_RE = /^[0-9a-f]{64}$/;
 const KIND = 'VERIFICATION_EVIDENCE_V1';
 const MODES = new Set(['issue', 'verify']);
 const PROFILES = new Set([
@@ -84,6 +85,8 @@ export function issueReceipt(input) {
   if (!plannedChecks) return fail('INVALID_PLANNED_CHECKS');
   const results = normalizeResults(input.results, plannedChecks);
   if (!results) return fail('INCOMPLETE_OR_NONPASS_RESULTS');
+  const canonicalSourceFingerprint = input.canonicalSourceFingerprint ?? null;
+  if (canonicalSourceFingerprint !== null && !SHA256_RE.test(canonicalSourceFingerprint)) return fail('INVALID_CANONICAL_SOURCE_FINGERPRINT');
 
   const core = {
     schemaVersion: 1,
@@ -95,6 +98,7 @@ export function issueReceipt(input) {
     scopeDecision: input.scopeDecision,
     plannedChecks,
     results,
+    ...(canonicalSourceFingerprint ? { canonicalSourceFingerprint } : {}),
   };
   const receiptId = digestReceiptCore(core);
   return { pass: true, decision: 'ISSUED', receipt: { ...core, receiptId } };
@@ -111,6 +115,8 @@ function validateReceipt(receipt) {
   if (!changedFiles || !plannedChecks) return fail('INVALID_RECEIPT_SET');
   const results = normalizeResults(receipt.results, plannedChecks);
   if (!results) return fail('INVALID_RECEIPT_RESULTS');
+  const hasCanonicalFingerprint = Object.hasOwn(receipt, 'canonicalSourceFingerprint');
+  if (hasCanonicalFingerprint && !SHA256_RE.test(receipt.canonicalSourceFingerprint ?? '')) return fail('INVALID_RECEIPT_CANONICAL_SOURCE_FINGERPRINT');
   const core = {
     schemaVersion: 1,
     kind: KIND,
@@ -121,6 +127,7 @@ function validateReceipt(receipt) {
     scopeDecision: receipt.scopeDecision,
     plannedChecks,
     results,
+    ...(hasCanonicalFingerprint ? { canonicalSourceFingerprint: receipt.canonicalSourceFingerprint } : {}),
   };
   const expected = digestReceiptCore(core);
   if (receipt.receiptId !== expected) return fail('RECEIPT_TAMPERED');
@@ -141,6 +148,23 @@ export function verifyReceipt(input) {
   if (current.baseSha !== checked.core.baseSha) return fail('BASE_SHA_MISMATCH');
   if (current.headSha !== checked.core.headSha) return fail('HEAD_SHA_MISMATCH');
   if (stableJson(currentFiles) !== stableJson(checked.core.changedFiles)) return fail('CHANGED_FILES_MISMATCH');
+  const currentHasCanonicalFingerprint = Object.hasOwn(current, 'canonicalSourceFingerprint') && current.canonicalSourceFingerprint !== null;
+  if (currentHasCanonicalFingerprint && !SHA256_RE.test(current.canonicalSourceFingerprint ?? '')) return fail('INVALID_CURRENT_CANONICAL_SOURCE_FINGERPRINT');
+  const receiptHasCanonicalFingerprint = typeof checked.core.canonicalSourceFingerprint === 'string';
+  if (currentHasCanonicalFingerprint && !receiptHasCanonicalFingerprint) {
+    return fail('CANONICAL_SOURCE_FINGERPRINT_MISSING', {
+      invalidatedEvidence: ['VERIFICATION_RESULTS', 'SCREENSHOTS', 'COMPLETION_PASS'],
+    });
+  }
+  if (!currentHasCanonicalFingerprint && receiptHasCanonicalFingerprint) return fail('CURRENT_CANONICAL_SOURCE_FINGERPRINT_REQUIRED');
+  if (currentHasCanonicalFingerprint && current.canonicalSourceFingerprint !== checked.core.canonicalSourceFingerprint) {
+    return fail('CANONICAL_SOURCE_CHANGED', {
+      expectedCanonicalSourceFingerprint: checked.core.canonicalSourceFingerprint,
+      currentCanonicalSourceFingerprint: current.canonicalSourceFingerprint,
+      invalidatedEvidence: ['VERIFICATION_RESULTS', 'SCREENSHOTS', 'COMPLETION_PASS'],
+      requiredRoute: ['LATEST_CANONICAL', 'IMPLEMENTATION_DIFF', 'NECESSARY_FIXES_ONLY', 'RETEST', 'REGENERATE_SCREENSHOTS', 'FINAL_PR_AUDIT'],
+    });
+  }
   return {
     pass: true,
     decision: 'REUSE',
@@ -148,6 +172,7 @@ export function verifyReceipt(input) {
     reusableChecks: checked.core.plannedChecks,
     profile: checked.core.profile,
     scopeDecision: checked.core.scopeDecision,
+    ...(receiptHasCanonicalFingerprint ? { canonicalSourceFingerprint: checked.core.canonicalSourceFingerprint } : {}),
   };
 }
 

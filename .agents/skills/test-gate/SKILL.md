@@ -145,6 +145,12 @@ The gate classifies the changed files into one of these profiles:
 - `MIXED_RUNTIME`
 - `UNKNOWN`
 
+Classification notes:
+
+- The repository-root `index.html` is always treated as frontend.
+- Not every `scripts/*.ts|.js|.mjs` file is treated as frontend. A `scripts/*` file is only classified as frontend when its filename clearly combines a frontend/UI/browser/render/layout/visual/home-stage/home-invoice purpose with verification/test/selftest/smoke/check/scale semantics (for example `scripts/home-stage-scale.selftest.ts` or `scripts/home-invoice-pending.selftest.ts`). Other `scripts/*` files fall through to `UNKNOWN` and require `STOP`.
+- Dependency, migration, governance/docs, and backend classification still take priority over this frontend-verification-script predicate.
+
 Decisions:
 
 - `PROCEED`: planned verification is proportionate and contains the required minimum checks.
@@ -210,6 +216,27 @@ Use repository commands that actually exist. Do not invent commands.
 - Do not repeat the same property merely because work moved from implementation to PR, merge, or post-merge.
 - A PR CI gate normally provides its independent evidence before merge. A second post-merge run is justified only for an explicitly post-merge/deployment/runtime property, not unchanged source behavior.
 - Evidence reuse never converts unavailable or unknown evidence into PASS.
+
+### Canonical Source Update Checkpoint
+
+When the task uses a Canonical Contract source, bind verification to the **content identity** of the CURRENT canonical sources, not only to implementation HEAD.
+
+Run the existing Canonical Contract Gate at these checkpoints:
+
+1. `PRE_IMPLEMENTATION` — record `canonicalSourceFingerprint`.
+2. `PRE_ARTIFACT` — before a screenshot or generated deliverable, compare with the recorded fingerprint.
+3. `PRE_FINAL_AUDIT` — compare again before final-pr-audit.
+4. `PRE_PR` — compare immediately before PR creation or update.
+
+Example after the baseline has been recorded:
+
+```text
+node .agents/skills/handoff/canonical-contract-gate.mjs --context-file PROJECT_CONTEXT.json --checkpoint PRE_ARTIFACT --expected-source-fingerprint <sha256> --pretty
+```
+
+The fingerprint is SHA-256 over the normalized Canonical Contract identity plus the bytes of only its CURRENT source files. File timestamps and unrelated repository files are not inputs. A changed canonical source returns `CANONICAL_SOURCE_CHANGED`; prior verification results, screenshots, and completion PASS are stale. Return to latest canonical -> implementation diff -> necessary fixes only -> retest -> regenerate screenshots -> final-pr-audit. Do not reinterpret the new canonical or widen implementation scope.
+
+When issuing `VERIFICATION_EVIDENCE_V1` for work with a Canonical Contract, include the current `canonicalSourceFingerprint`. Reuse verification only when final audit supplies the current fingerprint and it matches the receipt. A receipt created without canonical binding cannot be reused for a task that now has a current canonical fingerprint.
 
 ### Machine-readable verification evidence receipt
 

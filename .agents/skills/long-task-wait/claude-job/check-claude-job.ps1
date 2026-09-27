@@ -1,12 +1,27 @@
 ﻿<#
 .SYNOPSIS
   Read-only status check for an asynchronous Claude implementation job.
+
+.DESCRIPTION
+  In addition to the existing PID+process-start-time-bound LOST/LONG_RUNNING views, this
+  also reports a read-only NO_PROGRESS_WARNING candidate signal derived only from the
+  newest last-write timestamp among job evidence files that already exist (status.json,
+  orchestrator.json, stderr.log, test.log, result.json, task.json).
+
+  NO_PROGRESS_WARNING is honestly named: an absence of file activity does not prove Claude
+  or the orchestrator is frozen. In particular, the current qualified
+  implementation-orchestrator.mjs buffers the provider's stdout/stderr and returns it only
+  after the whole call completes, so stderr.log/orchestrator.json show no interim activity
+  even while a long single provider call is genuinely still working. Treat this signal as a
+  candidate for human/AI inspection only. It is never an automatic kill trigger, and this
+  script never stops or signals any process.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$RepoPath,
     [string]$JobId,
-    [int]$LongMinutes = 60
+    [int]$LongMinutes = 60,
+    [int]$NoProgressMinutes = 90
 )
 
 Set-StrictMode -Version 2
@@ -50,12 +65,34 @@ $identityPending = $st.state -eq 'STARTING' -and -not $startTicks -and $elapsed 
 if ($active -and -not $alive -and -not $identityPending) { $view = 'LOST' }
 elseif ($active -and $alive -and $elapsed -gt $LongMinutes) { $view = 'LONG_RUNNING' }
 
-Write-Host "=== $JobId [$view] ==="
+# Read-only no-observable-progress candidate signal. See NO_PROGRESS_WARNING limitation
+# note above: this is never an automatic kill trigger and this script never stops anything.
+$progressFiles = @('status.json','orchestrator.json','stderr.log','test.log','result.json','task.json') |
+    ForEach-Object { Join-Path $jobDir $_ } | Where-Object { Test-Path $_ }
+$lastActivityUtc = $null
+foreach ($f in $progressFiles) {
+    $t = (Get-Item $f).LastWriteTimeUtc
+    if (-not $lastActivityUtc -or $t -gt $lastActivityUtc) { $lastActivityUtc = $t }
+}
+$noProgressMinutesElapsed = if ($lastActivityUtc) { [math]::Round(((Get-Date).ToUniversalTime() - $lastActivityUtc).TotalMinutes, 1) } else { $null }
+$noProgressWarning = [bool]($active -and $alive -and $lastActivityUtc -and $noProgressMinutesElapsed -gt $NoProgressMinutes)
+$viewLabel = if ($noProgressWarning) { "$view NO_PROGRESS_WARNING" } else { $view }
+
+Write-Host "=== $JobId [$viewLabel] ==="
 Write-Host "elapsed  : $elapsed min"
 Write-Host "runner   : $(if ($alive) { "alive PID $rpid" } elseif ($pidReused) { "PID $rpid reused by another process" } elseif ($identityPending) { 'identity pending' } else { 'not running' })"
 Write-Host "branch   : $($st.branch)"
 Write-Host "worktree : $($st.worktree)"
 if (Prop $st 'continued_from') { Write-Host "from     : $($st.continued_from)" }
+if ($null -ne (Prop $st 'attempt')) {
+    Write-Host "attempt  : $($st.attempt) (auto_retries_used $(Prop $st 'auto_retries_used')/$(Prop $st 'max_auto_retries'); retry_stop_code: $(Prop $st 'retry_stop_code'))"
+}
+if ($lastActivityUtc) {
+    $progressNote = if ($noProgressWarning) { " [NO_PROGRESS_WARNING: candidate only, NOT proof of a frozen process; see script header limitation about buffered provider output]" } else { '' }
+    Write-Host "progress : last evidence-file write $noProgressMinutesElapsed min ago$progressNote"
+} else {
+    Write-Host "progress : no evidence files found yet"
+}
 
 if (Test-Path $st.worktree) {
     $ch = @(git -C $st.worktree diff --name-only $st.root_base_commit 2>$null) + @(git -C $st.worktree ls-files --others --exclude-standard 2>$null)
@@ -83,5 +120,8 @@ switch ($view) {
     'GATE_FAILED' { Write-Host 'Investigate scope/test failure; do not discard changes automatically.' }
     'GATE_INCOMPLETE' { Write-Host 'Provide the missing test gate before treating the job as complete.' }
     'READY_FOR_REVIEW' { Write-Host 'Job-local gates passed. Return to the normal Foundation test/final-audit/PR workflow.' }
+}
+if ($noProgressWarning) {
+    Write-Host "`nNO_PROGRESS_WARNING: warning/candidate only, never an automatic kill trigger. This script cannot and does not stop any process. Inspect diff/logs/process before any manual decision; remember provider output is buffered until the call completes."
 }
 exit 0

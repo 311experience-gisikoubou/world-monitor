@@ -122,6 +122,19 @@ Two things this script deliberately does **not** do, to keep the existing checkp
 
 Like `detect-codex.ps1` and `validate-handoff-message.ps1`, this script does not run itself — it is invoked explicitly, for a task the operator has already decided to hand to Codex.
 
+## Work-State View and Generated Handoff (Phase 3)
+
+`inbox/`, `outbox/`, and `processed/` are **transport and audit trail only — not work-state authority**. Mutable work state (stage, outcome, human-decision status, next action) comes from the view generated at read time by `work-state-report.mjs` from the existing sources: GitHub Issue + `ai-job` labels, `.ai-jobs/<job>/{status,result,orchestrator}.json`, and Git worktree facts. Nothing is persisted as a second copy, and the helper is read-only.
+
+```
+node "<skill dir>/work-state-report.mjs" --repo "<repo root>" --issue <n> [--format json|markdown|handoff]
+node "<skill dir>/work-state-report-selftest.mjs"
+```
+
+- `--format handoff` emits a local-ai-handoff message (`message_id`, `head_sha`, `repository`, `branch` + minimum existing facts) from the same view. It is unavailable when repository/worktree/branch/HEAD is not concrete and consistent, or the worktree is not clean (dirty/unknown). `message_id` is a hash of repository, Issue, job, stage, and HEAD, so re-processing is caught by the existing duplicate guard.
+- `invoke-work-state-handoff.ps1 -RepoRoot <root> -IssueNumber <n> [-DryRun]` composes the generated handoff with the existing `validate-handoff-message.ps1` and `run-codex-handoff.ps1` (always `-s read-only`). It moves outbox → inbox only after validation passes, and inbox → processed only on success; on any failure evidence stays in place. `-DryRun` generates and validates only (temp file, no Codex, no lifecycle moves). It does not make Codex a default or change `ai-task-router`.
+- The handoff runs inside the job worktree, so its `.ai-handoff/runtime/` should be ignored/untracked there; transport files under that path are ignored when judging clean/dirty.
+
 ## Safety Constraints
 
 - Do not write secrets, tokens, credentials, personal information, or real data into any `.ai-handoff/` file (`CORE.md`).
