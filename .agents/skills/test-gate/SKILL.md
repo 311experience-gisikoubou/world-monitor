@@ -59,9 +59,9 @@ Before implementation, run the preparation gate with a project-local reproductio
 <preflight-json> | node .agents/skills/test-gate/ui-reference-reproduction-gate.mjs
 ```
 
-The config must point to an already-prepared approved reference/version, overlay-verified dimension table, tolerances, inspection script, display conditions, fixed synthetic dummy data, and overlay proof. The implementation AI must not create, infer, fill, or relax those preparation inputs. A missing, contradictory, untracked, symlinked, stale, or mismatched input returns `STOP`. Pass the preflight receipt's `protectedPaths` to the Claude implementation route as `forbiddenScope`.
+The config must point to an already-prepared approved reference/version, overlay-verified dimension table, numeric tolerances, inspection script, fixed capture conditions, fixed synthetic dummy data, overlay proof, FINAL visual-diff thresholds, and a fixed-shape registry. Capture conditions include viewport, OS scale, app zoom, DPR, app/window state, and font. Each fixed-shape entry records component ID, target region, canonical image/SVG, version, SHA-256, and explicit pixel thresholds. All of those files, including each canonical shape asset, are protected preparation inputs. The implementation AI must not create, infer, fill, redraw, simplify, replace, or relax them. A missing, contradictory, untracked, symlinked, stale, hash-mismatched, or out-of-bounds input returns `STOP`. Pass the preflight receipt's `protectedPaths` to the Claude implementation route as `forbiddenScope`.
 
-At EARLY, MILESTONE, and FINAL REALITY, execute the fixed inspection script against the actual rendered application and submit its DOM/CSS values to the reproduction gate in `EVALUATE` mode. The gate itself decides each fixed check ID from the prepared expected value and tolerance. Position, size, spacing, font, and color are the primary PASS/FAIL evidence. A numeric or exact-value FAIL must be fixed and remeasured before continuing. If the same check ID fails three consecutive measured attempts, the gate returns `STOP / REPEATED_CHECK_FAILURE`.
+At EARLY and MILESTONE, execute the fixed inspection script against the actual rendered application and submit its DOM/CSS values to the reproduction gate in `EVALUATE` mode. The gate decides each fixed check ID from the prepared expected value and tolerance; a numeric or exact-value FAIL must be fixed and remeasured before continuing. If the same check ID fails three consecutive measured attempts, the gate returns `STOP / REPEATED_CHECK_FAILURE`. At FINAL REALITY, the same numeric checks remain mandatory and the gate additionally requires a real app screenshot captured under the fixed conditions. FINAL PASS requires both the direct approved-reference-vs-actual screenshot comparison and every registered fixed-shape region comparison to PASS. Numeric PASS never overrides visual or shape FAIL, and visual PASS never overrides numeric FAIL.
 
 A PASS `UI_MEASUREMENT_V1` receipt is tamper-evident and bound to the exact `stateId`. Supply that same receipt to staged reality evidence as both `UI_MEASUREMENT` and `PROTECTED_FILES_CHECK`; the staged gate independently verifies its integrity/state binding and that protected preparation files still match their preflight hashes.
 
@@ -71,9 +71,9 @@ Self-test:
 node .agents/skills/test-gate/ui-reference-reproduction-gate-selftest.mjs
 ```
 
-### Visual Diff Engine — Supplemental Evidence
+### Visual Diff Engine — FINAL Fidelity Evidence
 
-Screenshot, overlay, and pixel-diff output help locate visual drift and belong in PR evidence, but they are **not** the PASS/FAIL authority for `UI_REFERENCE_REPRODUCTION`. They cannot override a failed DOM/CSS measurement or substitute for an unrun inspection.
+For `UI_REFERENCE_REPRODUCTION`, the direct approved-reference image vs actual app screenshot diff is mandatory PASS/FAIL evidence at FINAL REALITY. Registered fixed-shape regions are also compared directly so a tooth/icon/logo/diagram with correct position and size but a different outline still fails. EARLY/MILESTONE remain numeric-centered. An overlay proof or a measurement-marked copy of the reference is never accepted as the actual screenshot. Image/shape evidence cannot override a failed DOM/CSS measurement or substitute for an unrun inspection.
 
 The dependency-free helper can still compare the approved image and actual screenshot under fixed capture conditions:
 
@@ -81,7 +81,7 @@ The dependency-free helper can still compare the approved image and actual scree
 node .agents/skills/test-gate/visual-diff-engine.mjs --root <repo-root> --view-id <viewId> --actual <actual-screenshot.png> --pixel-delta-threshold <0-255> --max-changed-ratio <0-1> --actual-viewport WxH --state-id <stateId> [--out <evidence.json>] [--pretty]
 ```
 
-Its result records dimensions, changed pixel count/ratio, mean absolute channel delta, file hashes, viewport matching, and exact state binding. Thresholds remain explicit rather than guessed. Use the output as supplemental diagnosis/comparison evidence only.
+Its result records dimensions, changed pixel count/ratio, mean absolute channel delta, file hashes, viewport matching, and exact state binding. Thresholds remain explicit rather than guessed. The reproduction gate embeds and hash-binds this result into the same `UI_MEASUREMENT_V1` receipt; staged reality therefore needs no parallel gate or duplicate evidence system.
 
 Self-test:
 

@@ -12,6 +12,7 @@ const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_DIMENSION = 10000;
 const CHANNELS_BY_COLOR_TYPE = { 0: 1, 2: 3, 4: 2, 6: 4 };
 const VIEW_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u;
+const COMPONENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u;
 const STATE_ID_RE = /^(?:git|remote):[0-9a-f]{40}$|^(?:worktree|artifact):[0-9a-f]{64}$/u;
 
 const CRC_TABLE = (() => {
@@ -189,6 +190,102 @@ export function compareDecoded(baseline, actual, { pixelDeltaThreshold, maxChang
   return { ok: true, totalPixelCount, changedPixelCount, changedRatio, meanAbsoluteChannelDelta, withinThreshold: changedRatio <= maxChangedRatio };
 }
 
+function cropDecoded(decoded, region) {
+  if (!region || !Number.isInteger(region.x) || !Number.isInteger(region.y) ||
+      !Number.isInteger(region.width) || !Number.isInteger(region.height) ||
+      region.x < 0 || region.y < 0 || region.width <= 0 || region.height <= 0 ||
+      region.x + region.width > decoded.width || region.y + region.height > decoded.height) {
+    return { ok: false, code: 'REGION_INVALID' };
+  }
+  const data = Buffer.alloc(region.width * region.height * 4);
+  const sourceStride = decoded.width * 4;
+  const targetStride = region.width * 4;
+  for (let y = 0; y < region.height; y++) {
+    const sourceStart = (region.y + y) * sourceStride + region.x * 4;
+    decoded.data.copy(data, y * targetStride, sourceStart, sourceStart + targetStride);
+  }
+  return { ok: true, width: region.width, height: region.height, data };
+}
+
+export function runVisualRegionDiff({
+  baselinePath, actualPath, region, pixelDeltaThreshold, maxChangedRatio, stateId, componentId,
+}) {
+  if (!STATE_ID_RE.test(stateId || '')) return stop('STATE_ID_INVALID');
+  if (!COMPONENT_ID_RE.test(componentId || '')) return stop('COMPONENT_ID_INVALID');
+  if (!existsSync(baselinePath)) return stop('REFERENCE_IMAGE_MISSING', { baselinePath });
+  if (!existsSync(actualPath)) return stop('ACTUAL_IMAGE_MISSING', { actualPath });
+  const baselineBuffer = readFileSync(baselinePath);
+  const actualBuffer = readFileSync(actualPath);
+  if (baselineBuffer.length > MAX_IMAGE_BYTES) return stop('REFERENCE_IMAGE_TOO_LARGE', { baselinePath });
+  if (actualBuffer.length > MAX_IMAGE_BYTES) return stop('ACTUAL_IMAGE_TOO_LARGE', { actualPath });
+  const baselineDecoded = decodePng(baselineBuffer);
+  if (!baselineDecoded.ok) return stop(baselineDecoded.code, { side: 'baseline' });
+  const actualDecoded = decodePng(actualBuffer);
+  if (!actualDecoded.ok) return stop(actualDecoded.code, { side: 'actual' });
+  if (baselineDecoded.width !== actualDecoded.width || baselineDecoded.height !== actualDecoded.height) {
+    return stop('IMAGE_DIMENSIONS_MISMATCH', {
+      baselineWidth: baselineDecoded.width, baselineHeight: baselineDecoded.height,
+      actualWidth: actualDecoded.width, actualHeight: actualDecoded.height,
+    });
+  }
+  const baselineRegion = cropDecoded(baselineDecoded, region);
+  if (!baselineRegion.ok) return stop(baselineRegion.code, { side: 'baseline', region });
+  const actualRegion = cropDecoded(actualDecoded, region);
+  if (!actualRegion.ok) return stop(actualRegion.code, { side: 'actual', region });
+  const compared = compareDecoded(baselineRegion, actualRegion, { pixelDeltaThreshold, maxChangedRatio });
+  if (!compared.ok) return stop(compared.code);
+  const core = {
+    schemaVersion: 1,
+    evidenceType: 'FIXED_SHAPE_DIFF_V1',
+    stateId,
+    componentId,
+    region: { ...region },
+    baselineSha256: sha256(baselineBuffer),
+    actualSha256: sha256(actualBuffer),
+    pixelDeltaThreshold,
+    maxChangedRatio,
+    totalPixelCount: compared.totalPixelCount,
+    changedPixelCount: compared.changedPixelCount,
+    changedRatio: compared.changedRatio,
+    meanAbsoluteChannelDelta: compared.meanAbsoluteChannelDelta,
+  };
+  const result = compared.withinThreshold ? 'PASS' : 'FAIL';
+  const code = result === 'PASS' ? 'FIXED_SHAPE_WITHIN_THRESHOLD' : 'FIXED_SHAPE_EXCEEDS_THRESHOLD';
+  const evidenceId = createHash('sha256').update(JSON.stringify(core)).digest('hex');
+  return { ...core, result, code, evidenceId };
+}
+
+// Structural/tamper-evidence verification for a FIXED_SHAPE_DIFF_V1 receipt, mirroring
+// verifyVisualDiffEvidenceStructure: accepts a legitimately measured PASS or FAIL, rejects a
+// malformed/tampered/wrong-state one. The reproduction gate's FINAL phase uses this to trust a
+// freshly computed runVisualRegionDiff result before embedding it in the measurement receipt.
+export function verifyFixedShapeDiffEvidenceStructure(receipt, expectedStateId, expectedComponentId) {
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return { ok: false, code: 'FIXED_SHAPE_DIFF_RECEIPT_INVALID' };
+  if (!STATE_ID_RE.test(expectedStateId || '') || receipt.stateId !== expectedStateId) return { ok: false, code: 'FIXED_SHAPE_DIFF_STATE_MISMATCH' };
+  if (!COMPONENT_ID_RE.test(expectedComponentId || '') || receipt.componentId !== expectedComponentId) return { ok: false, code: 'FIXED_SHAPE_DIFF_COMPONENT_MISMATCH' };
+  if (receipt.schemaVersion !== 1 || receipt.evidenceType !== 'FIXED_SHAPE_DIFF_V1' || !['PASS', 'FAIL'].includes(receipt.result)) {
+    return { ok: false, code: 'FIXED_SHAPE_DIFF_RECEIPT_INVALID' };
+  }
+  if (!/^[0-9a-f]{64}$/u.test(receipt.evidenceId || '') || !/^[0-9a-f]{64}$/u.test(receipt.baselineSha256 || '') || !/^[0-9a-f]{64}$/u.test(receipt.actualSha256 || '')) {
+    return { ok: false, code: 'FIXED_SHAPE_DIFF_RECEIPT_INVALID' };
+  }
+  if (!Number.isInteger(receipt.pixelDeltaThreshold) || receipt.pixelDeltaThreshold < 0 || receipt.pixelDeltaThreshold > 255 ||
+      !Number.isFinite(receipt.maxChangedRatio) || receipt.maxChangedRatio < 0 || receipt.maxChangedRatio > 1 ||
+      !Number.isInteger(receipt.totalPixelCount) || receipt.totalPixelCount <= 0 ||
+      !Number.isInteger(receipt.changedPixelCount) || receipt.changedPixelCount < 0 || receipt.changedPixelCount > receipt.totalPixelCount ||
+      !Number.isFinite(receipt.changedRatio) || !Number.isFinite(receipt.meanAbsoluteChannelDelta)) {
+    return { ok: false, code: 'FIXED_SHAPE_DIFF_RECEIPT_INVALID' };
+  }
+  const expectedRatio = receipt.changedPixelCount / receipt.totalPixelCount;
+  if (Math.abs(expectedRatio - receipt.changedRatio) > Number.EPSILON * 8) return { ok: false, code: 'FIXED_SHAPE_DIFF_RECEIPT_INCONSISTENT' };
+  if (receipt.result === 'PASS' && receipt.changedRatio > receipt.maxChangedRatio) return { ok: false, code: 'FIXED_SHAPE_DIFF_RECEIPT_INCONSISTENT' };
+  if (receipt.result === 'FAIL' && receipt.changedRatio <= receipt.maxChangedRatio) return { ok: false, code: 'FIXED_SHAPE_DIFF_RECEIPT_INCONSISTENT' };
+  const { result, code, evidenceId, ...core } = receipt;
+  const expectedEvidenceId = createHash('sha256').update(JSON.stringify(core)).digest('hex');
+  if (expectedEvidenceId !== evidenceId) return { ok: false, code: 'FIXED_SHAPE_DIFF_RECEIPT_TAMPERED' };
+  return { ok: true, code: 'FIXED_SHAPE_DIFF_RECEIPT_STRUCTURE_VALID', evidenceId, result: receipt.result };
+}
+
 export function resolveRegistryBaseline(root, viewId) {
   const registryPath = resolve(root, ...UI_REFERENCE_REGISTRY.split('/'));
   if (!existsSync(registryPath)) return { ok: false, code: 'UI_REFERENCE_REGISTRY_MISSING' };
@@ -271,11 +368,16 @@ export function runVisualDiff({ baselinePath, actualPath, pixelDeltaThreshold, m
   return { ...core, result, code, evidenceId };
 }
 
-export function verifyVisualDiffEvidence(receipt, expectedStateId) {
+// Structural/tamper-evidence verification that accepts either a PASS or a legitimately measured
+// FAIL receipt. Callers that must distinguish "comparison ran and failed" from "input is
+// malformed/tampered/wrong state" (for example the reproduction gate's FINAL-phase visual and
+// fixed-shape checks, which must FAIL closed on real drift but STOP closed on bad evidence) use
+// this instead of verifyVisualDiffEvidence, which additionally requires PASS.
+export function verifyVisualDiffEvidenceStructure(receipt, expectedStateId) {
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return { ok: false, code: 'VISUAL_DIFF_RECEIPT_INVALID' };
   if (!STATE_ID_RE.test(expectedStateId || '') || receipt.stateId !== expectedStateId) return { ok: false, code: 'VISUAL_DIFF_STATE_MISMATCH' };
-  if (receipt.schemaVersion !== 1 || receipt.evidenceType !== 'VISUAL_DIFF_V1' || receipt.result !== 'PASS' || receipt.code !== 'VISUAL_DIFF_WITHIN_THRESHOLD') {
-    return { ok: false, code: 'VISUAL_DIFF_RECEIPT_NOT_PASS' };
+  if (receipt.schemaVersion !== 1 || receipt.evidenceType !== 'VISUAL_DIFF_V1' || !['PASS', 'FAIL'].includes(receipt.result)) {
+    return { ok: false, code: 'VISUAL_DIFF_RECEIPT_INVALID' };
   }
   if (!/^[0-9a-f]{64}$/u.test(receipt.evidenceId || '') || !/^[0-9a-f]{64}$/u.test(receipt.baseline?.sha256 || '') || !/^[0-9a-f]{64}$/u.test(receipt.actual?.sha256 || '')) {
     return { ok: false, code: 'VISUAL_DIFF_RECEIPT_INVALID' };
@@ -288,13 +390,20 @@ export function verifyVisualDiffEvidence(receipt, expectedStateId) {
     return { ok: false, code: 'VISUAL_DIFF_RECEIPT_INVALID' };
   }
   const expectedRatio = receipt.changedPixelCount / receipt.totalPixelCount;
-  if (Math.abs(expectedRatio - receipt.changedRatio) > Number.EPSILON * 8 || receipt.changedRatio > receipt.maxChangedRatio) {
-    return { ok: false, code: 'VISUAL_DIFF_RECEIPT_INCONSISTENT' };
-  }
+  if (Math.abs(expectedRatio - receipt.changedRatio) > Number.EPSILON * 8) return { ok: false, code: 'VISUAL_DIFF_RECEIPT_INCONSISTENT' };
+  if (receipt.result === 'PASS' && receipt.changedRatio > receipt.maxChangedRatio) return { ok: false, code: 'VISUAL_DIFF_RECEIPT_INCONSISTENT' };
+  if (receipt.result === 'FAIL' && receipt.changedRatio <= receipt.maxChangedRatio) return { ok: false, code: 'VISUAL_DIFF_RECEIPT_INCONSISTENT' };
   const { result, code, evidenceId, ...core } = receipt;
   const expectedEvidenceId = createHash('sha256').update(JSON.stringify(core)).digest('hex');
   if (expectedEvidenceId !== evidenceId) return { ok: false, code: 'VISUAL_DIFF_RECEIPT_TAMPERED' };
-  return { ok: true, code: 'VISUAL_DIFF_RECEIPT_VALID', evidenceId };
+  return { ok: true, code: 'VISUAL_DIFF_RECEIPT_STRUCTURE_VALID', evidenceId, result: receipt.result };
+}
+
+export function verifyVisualDiffEvidence(receipt, expectedStateId) {
+  const structural = verifyVisualDiffEvidenceStructure(receipt, expectedStateId);
+  if (!structural.ok) return structural;
+  if (receipt.result !== 'PASS' || receipt.code !== 'VISUAL_DIFF_WITHIN_THRESHOLD') return { ok: false, code: 'VISUAL_DIFF_RECEIPT_NOT_PASS' };
+  return { ok: true, code: 'VISUAL_DIFF_RECEIPT_VALID', evidenceId: structural.evidenceId };
 }
 
 function arg(args, name) { const i = args.indexOf(name); if (i < 0) return null; if (!args[i + 1]) throw new Error(name + '_VALUE_REQUIRED'); return args[i + 1]; }

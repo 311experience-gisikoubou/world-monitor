@@ -280,7 +280,7 @@ Verification placement follows property equivalence: deterministic source checks
 
 人間がUI画像を「採用」「基準」「これでいく」と明示した場合、その画像は会話内だけに残さず、application repositoryの `docs/ui-reference/` にproject-local正本として保存する。詳細な保存形式・archive・再現検証は `handoff` skillの Approved UI Reference Authority を正本とする。
 
-この仕組みは承認済み画像がある場合だけ発動する。非UI projectや未確定デザインにはfolder追加を強制しない。承認済み画像はCanonical Contractの `DESIGN / REFERENCE_IMAGE` artifactとHuman Decision Syncへ結び、turn-start / preflight / final auditで既存Canonical Contract Gateを再利用して古い画像・scope不一致・CURRENTの二重化をSTOPする。完成デザインへ切り替えた時点で仮/旧UIとAI記憶は見た目の根拠から外し、既存実装はロジック・データ挙動だけを参照する。忠実再現は `UI_REFERENCE_REPRODUCTION` として扱い、実装前に `ui-reference-reproduction-gate.mjs` で正本・Overlay確認済み寸法・許容値・検査スクリプト・表示条件・固定synthetic dummy dataを固定し、その `protectedPaths` をClaude実装経路の `forbiddenScope` に渡す。EARLY / MILESTONE / FINAL REALITYの合否はDOM/CSS数値計測を主判定とし、同一検査IDの3回連続FAILはSTOPする。スクリーンショット・Overlay・Pixel diffはズレ位置確認とPR証拠の補助に限定し、数値FAILを上書きしない。
+For approved-reference UI reproduction, keep using the existing Canonical Contract / Human Decision Sync / UI_REFERENCE_REPRODUCTION path. Preflight protects the approved reference, numeric criteria, fixed capture conditions, FINAL visual-diff thresholds, fixed-shape registry, and canonical image/SVG assets through protectedPaths/forbiddenScope. EARLY and MILESTONE remain numeric-centered. FINAL requires DOM/CSS numeric PASS plus a direct approved-reference-vs-actual app screenshot PASS and every registered fixed-shape region PASS; a measurement overlay or annotated reference is never actual-screen evidence. Any numeric, visual, shape, canonical-freshness, or protected-input FAIL blocks PR Ready/merge Ready.
 
 ### Human Decision Sync
 
