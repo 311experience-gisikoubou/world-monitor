@@ -23,7 +23,7 @@ function uiReceipt(stateId = G, phase = 'FINAL_REALITY_CHECK') {
     schemaVersion: 1,
     receiptType: 'UI_MEASUREMENT_V1',
     result: 'PASS',
-    code: 'UI_MEASUREMENT_PASS',
+    code: phase === 'FINAL_REALITY_CHECK' ? 'UI_REPRODUCTION_FINAL_PASS' : 'UI_MEASUREMENT_PASS',
     phase,
     stateId,
     artifactId: 'design-v1',
@@ -33,6 +33,13 @@ function uiReceipt(stateId = G, phase = 'FINAL_REALITY_CHECK') {
     protectedFilesUnchanged: true,
     checks: [],
     failedIds: [],
+    ...(phase === 'FINAL_REALITY_CHECK' ? {
+      captureConditionsMatched: true,
+      actualScreenshot: 'evidence/actual.png',
+      actualScreenshotSha256: '2'.repeat(64),
+      visualComparison: { result: 'PASS', evidenceType: 'VISUAL_DIFF_V1', evidenceId: '3'.repeat(64) },
+      fixedShapeComparison: { result: 'PASS', code: 'FIXED_SHAPES_PASS', componentCount: 1, failedShapeIds: [], checks: [] },
+    } : {}),
   };
   return { ...core, receiptId: createHash('sha256').update(JSON.stringify(core)).digest('hex') };
 }
@@ -202,9 +209,9 @@ result = evaluate(input(
 ));
 assert.equal(result.result, 'PASS');
 
-// Ordinary UI tasks remain backward compatible. Approved-reference reproduction is explicit
-// and uses numeric DOM/CSS measurement plus protected-file evidence at every staged check.
-// Overlay/pixel diff is intentionally outside the staged PASS/FAIL decision and remains PR evidence.
+// Ordinary UI tasks remain backward compatible. Approved-reference reproduction is explicit.
+// EARLY/MILESTONE remain numeric-centered; FINAL accepts the same tamper-evident receipt only
+// when numeric, direct reference-vs-actual visual comparison, and fixed-shape comparison all PASS.
 result = evaluate(input(
   'EARLY_CHECK', ['UI'],
   [ev('GIT_STATE'), ev('DIFF'), ev('SCREENSHOT')],
@@ -249,6 +256,19 @@ result = evaluate(input(
 ));
 assert.equal(result.result, 'PASS');
 assert.equal(result.code, 'FINAL_REALITY_CHECK_PASS');
+
+const missingVisualCore = { ...uiReceipt(G, 'FINAL_REALITY_CHECK') };
+delete missingVisualCore.receiptId;
+delete missingVisualCore.visualComparison;
+delete missingVisualCore.fixedShapeComparison;
+missingVisualCore.receiptId = createHash('sha256').update(JSON.stringify(missingVisualCore)).digest('hex');
+result = evaluate(input(
+  'FINAL_REALITY_CHECK', ['UI_REFERENCE_REPRODUCTION'],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), uiEv('UI_MEASUREMENT', G, missingVisualCore), uiEv('PROTECTED_FILES_CHECK', G, missingVisualCore), finalEv('TEST_GATE_RESULT')],
+  { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
+  G,
+));
+assert.equal(result.code, 'UI_REPRODUCTION_EVIDENCE_INVALID');
 
 const tamperedUiReceipt = uiReceipt(G, 'FINAL_REALITY_CHECK');
 tamperedUiReceipt.protectedFilesUnchanged = false;
