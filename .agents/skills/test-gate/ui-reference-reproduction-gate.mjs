@@ -24,6 +24,8 @@ const CATEGORIES = new Set(['POSITION', 'SIZE', 'SPACING', 'FONT', 'COLOR']);
 const MODES = new Set(['ABSOLUTE', 'EXACT']);
 const APP_WINDOW_STATES = new Set(['MAXIMIZED', 'FULLSCREEN', 'FIXED_WINDOWED']);
 const CANONICAL_SHAPE_KINDS = new Set(['IMAGE', 'SVG']);
+const CANONICALIZATION_COVERAGE = new Set(['MEASURED', 'NOT_APPLICABLE']);
+const CANONICALIZATION_AREAS = ['layoutGeometry', 'spacing', 'typography', 'colors', 'fixedShapes'];
 const SHAPE_IMAGE_ASSET_RE = /\.(?:png|jpe?g|webp)$/iu;
 const SHAPE_SVG_ASSET_RE = /\.svg$/iu;
 
@@ -84,18 +86,21 @@ function verifyReceiptHash(receipt) {
 }
 
 function normalizeConfig(raw) {
+  if (!obj(raw) || ![2, 3].includes(raw.schemaVersion) || raw.overlayVerified !== true) return null;
   const keys = [
     'schemaVersion', 'artifactId', 'viewId', 'referenceVersion', 'overlayVerified',
+    ...(raw.schemaVersion === 3 ? ['canonicalizationFile'] : []),
     'dimensionsFile', 'thresholdsFile', 'inspectionScript', 'displayConditionsFile',
     'dummyDataFile', 'overlayProofFile', 'finalVisualDiffThresholdsFile', 'fixedShapeRegistryFile',
   ];
-  if (!exactKeys(raw, keys) || raw.schemaVersion !== 2 || raw.overlayVerified !== true) return null;
+  if (!exactKeys(raw, keys)) return null;
   if (!ID_RE.test(raw.artifactId ?? '') || !VIEW_RE.test(raw.viewId ?? '') || !boundedText(raw.referenceVersion, 80)) return null;
   const pathFields = [
+    ...(raw.schemaVersion === 3 ? ['canonicalizationFile'] : []),
     'dimensionsFile', 'thresholdsFile', 'inspectionScript', 'displayConditionsFile',
     'dummyDataFile', 'overlayProofFile', 'finalVisualDiffThresholdsFile',
   ];
-  const normalized = { ...raw };
+  const normalized = { ...raw, canonicalizationFile: null };
   for (const key of pathFields) {
     const p = repoPath(raw[key]);
     if (!p) return null;
@@ -174,6 +179,44 @@ function normalizeDimensions(raw, config) {
   return checks;
 }
 
+function normalizeCanonicalization(raw, config) {
+  const keys = [
+    'schemaVersion', 'artifactId', 'viewId', 'referenceVersion', 'status',
+    'measurementMethod', 'unresolvedAmbiguities', 'coverage',
+  ];
+  if (!exactKeys(raw, keys) || raw.schemaVersion !== 1) return null;
+  if (raw.artifactId !== config.artifactId || raw.viewId !== config.viewId || raw.referenceVersion !== config.referenceVersion) return null;
+  if (raw.status !== 'COMPLETE' || raw.measurementMethod !== 'REFERENCE_IMAGE_MEASURED') return null;
+  if (!Array.isArray(raw.unresolvedAmbiguities) || raw.unresolvedAmbiguities.length !== 0) return null;
+  if (!exactKeys(raw.coverage, CANONICALIZATION_AREAS)) return null;
+  for (const area of CANONICALIZATION_AREAS) {
+    if (!CANONICALIZATION_COVERAGE.has(raw.coverage[area])) return null;
+  }
+  if (raw.coverage.layoutGeometry !== 'MEASURED' || raw.coverage.spacing !== 'MEASURED') return null;
+  return {
+    status: raw.status,
+    measurementMethod: raw.measurementMethod,
+    unresolvedAmbiguities: [],
+    coverage: { ...raw.coverage },
+  };
+}
+
+function canonicalizationCoverageMatches(canonicalization, dimensions, fixedShapes) {
+  const categories = new Set(dimensions.map(x => x.category));
+  if (!categories.has('POSITION') || !categories.has('SIZE') || !categories.has('SPACING')) return false;
+  const optional = [
+    ['typography', 'FONT'],
+    ['colors', 'COLOR'],
+  ];
+  for (const [area, category] of optional) {
+    const has = categories.has(category);
+    if ((canonicalization.coverage[area] === 'MEASURED') !== has) return false;
+  }
+  const shapesMeasured = fixedShapes.length > 0;
+  if ((canonicalization.coverage.fixedShapes === 'MEASURED') !== shapesMeasured) return false;
+  return true;
+}
+
 function normalizeThresholds(raw, dimensions) {
   if (!exactKeys(raw, ['schemaVersion', 'checks']) || raw.schemaVersion !== 1 || !Array.isArray(raw.checks)) return null;
   const byId = new Map();
@@ -220,6 +263,7 @@ function loadPreparation(root, configPath) {
   if (cfgRaw.error) return stop(cfgRaw.error);
   const config = normalizeConfig(cfgRaw.value);
   if (!config) return stop('UI_REPRO_CONFIG_INVALID');
+  if (config.schemaVersion !== 3 || !config.canonicalizationFile) return stop('UI_REPRO_CANONICALIZATION_REQUIRED');
 
   const context = readJson(resolve(root, 'PROJECT_CONTEXT.json'), 'PROJECT_CONTEXT_INVALID');
   if (context.error) return stop(context.error);
@@ -248,6 +292,7 @@ function loadPreparation(root, configPath) {
     config: cfgRel,
     registry: registryRel,
     referenceImage: reference.image,
+    canonicalization: config.canonicalizationFile,
     dimensions: config.dimensionsFile,
     thresholds: config.thresholdsFile,
     inspectionScript: config.inspectionScript,
@@ -265,6 +310,11 @@ function loadPreparation(root, configPath) {
     if (!hash) return stop('UI_REPRO_FIXED_FILE_INVALID', { name, path: rel });
     hashes[name] = hash;
   }
+
+  const canonicalizationRaw = readJson(inside(root, files.canonicalization), 'UI_REPRO_CANONICALIZATION_INVALID');
+  if (canonicalizationRaw.error) return stop(canonicalizationRaw.error);
+  const canonicalization = normalizeCanonicalization(canonicalizationRaw.value, config);
+  if (!canonicalization) return stop('UI_REPRO_CANONICALIZATION_INCOMPLETE');
 
   const dimsRaw = readJson(inside(root, files.dimensions), 'UI_REPRO_DIMENSIONS_INVALID');
   if (dimsRaw.error) return stop(dimsRaw.error);
@@ -305,6 +355,9 @@ function loadPreparation(root, configPath) {
   if (shapeRaw.error) return stop(shapeRaw.error);
   const fixedShapes = normalizeFixedShapeRegistry(shapeRaw.value, config);
   if (!fixedShapes) return stop('UI_REPRO_FIXED_SHAPE_REGISTRY_INVALID');
+  if (!canonicalizationCoverageMatches(canonicalization, dimensions, fixedShapes)) {
+    return stop('UI_REPRO_CANONICALIZATION_COVERAGE_MISMATCH');
+  }
   for (const component of fixedShapes) {
     const r = component.targetRegion;
     if (r.x + r.width > display.viewport.width || r.y + r.height > display.viewport.height) {
@@ -323,7 +376,7 @@ function loadPreparation(root, configPath) {
   }
 
   return {
-    ok: true, config, artifact, reference, files, hashes, dimensions, thresholds, display, dummy,
+    ok: true, config, artifact, reference, files, hashes, canonicalization, dimensions, thresholds, display, dummy,
     finalVisualDiffThresholds, fixedShapes,
     protectedPaths: [...new Set(Object.values(files))].sort(),
   };
@@ -350,6 +403,9 @@ export function preflight(input) {
     referenceImage: prepared.reference.image,
     referenceImageSha256: prepared.hashes.referenceImage,
     displayConditions: prepared.display,
+    canonicalizationStatus: prepared.canonicalization.status,
+    canonicalizationMethod: prepared.canonicalization.measurementMethod,
+    canonicalizationCoverage: prepared.canonicalization.coverage,
     checkCount: prepared.dimensions.length,
     fixedShapeCount: prepared.fixedShapes.length,
     finalVisualDiffThresholds: prepared.finalVisualDiffThresholds,
@@ -363,6 +419,10 @@ export function preflight(input) {
 export function verifyPreflightReceipt(receipt) {
   if (!receipt || receipt.receiptType !== 'UI_REPRODUCTION_PREFLIGHT_V1' || receipt.result !== 'PASS' || receipt.code !== 'UI_REPRODUCTION_PREFLIGHT_PASS') return false;
   if (!SHA40_RE.test(receipt.baseHead ?? '') || !SHA256_RE.test(receipt.referenceImageSha256 ?? '') || !Array.isArray(receipt.protectedPaths)) return false;
+  if (receipt.canonicalizationStatus !== 'COMPLETE' || receipt.canonicalizationMethod !== 'REFERENCE_IMAGE_MEASURED' ||
+      !exactKeys(receipt.canonicalizationCoverage, CANONICALIZATION_AREAS)) return false;
+  if (receipt.canonicalizationCoverage.layoutGeometry !== 'MEASURED' || receipt.canonicalizationCoverage.spacing !== 'MEASURED' ||
+      CANONICALIZATION_AREAS.some(area => !CANONICALIZATION_COVERAGE.has(receipt.canonicalizationCoverage[area]))) return false;
   return verifyReceiptHash(receipt);
 }
 

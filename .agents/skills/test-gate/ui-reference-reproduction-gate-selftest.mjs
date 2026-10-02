@@ -89,6 +89,16 @@ try {
     }],
   });
 
+  writeJson(join(root, 'visual-test', 'canonicalization.json'), {
+    schemaVersion: 1, artifactId, viewId, referenceVersion,
+    status: 'COMPLETE',
+    measurementMethod: 'REFERENCE_IMAGE_MEASURED',
+    unresolvedAmbiguities: [],
+    coverage: {
+      layoutGeometry: 'MEASURED', spacing: 'MEASURED', typography: 'MEASURED',
+      colors: 'MEASURED', fixedShapes: 'MEASURED',
+    },
+  });
   writeJson(join(root, 'visual-test', 'dimensions.json'), {
     schemaVersion: 1, artifactId, viewId, referenceVersion,
     checks: [
@@ -135,11 +145,12 @@ try {
     }],
   });
   writeJson(join(root, 'visual-test', 'reproduction.json'), {
-    schemaVersion: 2,
+    schemaVersion: 3,
     artifactId,
     viewId,
     referenceVersion,
     overlayVerified: true,
+    canonicalizationFile: 'visual-test/canonicalization.json',
     dimensionsFile: 'visual-test/dimensions.json',
     thresholdsFile: 'visual-test/thresholds.json',
     inspectionScript: 'visual-test/inspect.mjs',
@@ -161,9 +172,45 @@ try {
   assert.equal(pre.checkCount, 5);
   assert.equal(pre.fixedShapeCount, 1);
   assert.equal(verifyPreflightReceipt(pre), true);
+  assert(pre.protectedPaths.includes('visual-test/canonicalization.json'));
   assert(pre.protectedPaths.includes('visual-test/final-visual-thresholds.json'));
   assert(pre.protectedPaths.includes('visual-test/fixed-shapes.json'));
   assert(pre.protectedPaths.includes('visual-test/tooth-11.svg'));
+  assert.equal(pre.canonicalizationStatus, 'COMPLETE');
+  assert.equal(pre.canonicalizationMethod, 'REFERENCE_IMAGE_MEASURED');
+  assert.equal(pre.canonicalizationCoverage.layoutGeometry, 'MEASURED');
+
+  const reproductionPath = join(root, 'visual-test', 'reproduction.json');
+  const reproductionOriginal = JSON.parse(readFileSync(reproductionPath, 'utf8'));
+  const { canonicalizationFile: _removedCanonicalization, ...legacyConfig } = reproductionOriginal;
+  writeJson(reproductionPath, { ...legacyConfig, schemaVersion: 2 });
+  const legacyPreflight = preflight({
+    schemaVersion: 1, mode: 'PREFLIGHT', repoRoot: root, configPath: 'visual-test/reproduction.json',
+  });
+  assert.equal(legacyPreflight.result, 'STOP');
+  assert.equal(legacyPreflight.code, 'UI_REPRO_CANONICALIZATION_REQUIRED');
+  writeJson(reproductionPath, reproductionOriginal);
+
+  const canonicalizationPath = join(root, 'visual-test', 'canonicalization.json');
+  const canonicalizationOriginal = JSON.parse(readFileSync(canonicalizationPath, 'utf8'));
+  writeJson(canonicalizationPath, { ...canonicalizationOriginal, unresolvedAmbiguities: ['font still unresolved'] });
+  const ambiguousPreflight = preflight({
+    schemaVersion: 1, mode: 'PREFLIGHT', repoRoot: root, configPath: 'visual-test/reproduction.json',
+  });
+  assert.equal(ambiguousPreflight.result, 'STOP');
+  assert.equal(ambiguousPreflight.code, 'UI_REPRO_CANONICALIZATION_INCOMPLETE');
+  writeJson(canonicalizationPath, canonicalizationOriginal);
+
+  writeJson(canonicalizationPath, {
+    ...canonicalizationOriginal,
+    coverage: { ...canonicalizationOriginal.coverage, typography: 'NOT_APPLICABLE' },
+  });
+  const coverageMismatch = preflight({
+    schemaVersion: 1, mode: 'PREFLIGHT', repoRoot: root, configPath: 'visual-test/reproduction.json',
+  });
+  assert.equal(coverageMismatch.result, 'STOP');
+  assert.equal(coverageMismatch.code, 'UI_REPRO_CANONICALIZATION_COVERAGE_MISMATCH');
+  writeJson(canonicalizationPath, canonicalizationOriginal);
 
   const measurement = (stateId, phase = 'FINAL_REALITY_CHECK') => ({
     schemaVersion: 1, stateId, artifactId, viewId, referenceVersion,

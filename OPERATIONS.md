@@ -15,6 +15,7 @@
 - ジョブ開始時と重要な実行経路変更時に、AIは作業内容、各AIの得意分野、必要な権限・tool、実行環境、安全性・privacy境界、文脈保持、独立監査の必要性、追加費用を確認し、利用可能なAIの中からジョブ適性で実行者・監査者を選択する。
 - 各repositoryの`AGENTS.local.md`にあるAI役割記述は既定値・repository固有制約として必ず確認する。単なる過去の担当や通常経路は永久固定の割り当てとは扱わないが、安全・権限・責任・費用・データ取扱い・human approvalの明示境界は上書きしない（`roles/`、`learnings/L-0006.md`参照）。
 - AIだけで安全に決められる実行者・経路の技術選択を、非エンジニアの人間へ返さない。通常経路が利用不能なら、承認済みの安全境界内で別の利用可能な経路をAIが評価する。
+- `ChatGPT Work` は既定の第一選択にしない。仕様整理・設計・UI調整・正本化・repository確認・実機確認・PR準備が通常チャットから既存の安全なlocal/connector経路（例: Remote Desktop Commander、GitHub）で完結できる場合は、その単純な経路を優先する。長時間・外側のtool待ちを超える・切断耐性が必要な実装/検証だけを既存の`long-task-wait/claude-job`等のJob Runnerへ移す。Work等の別実行環境は、その作業に固有のbrowser/computer-use能力や独立実行環境が必要な場合にのみ選び、Workが利用不能という理由だけで人間の手作業へ戻さない。
 - 現行のsource実装では、qualificationを満たす間はClaude CLIの`claude-implementation-write`を第一実装経路とし、ChatGPTは仕様整理・設計・オーケストレーション・最終監査を既定担当とする。Codexのwrite経路は別途qualificationするまで実装フォールバックとして扱わず、Gemini/Antigravityは別途qualificationされるまでは独立レビュー・代替分析を主用途とする。ChatGPTによる直接source実装は閉じた例外理由がある場合だけとし、通常経路にはしない（`learnings/L-0006.md`参照）。
 - For Claude implementation that may outlive the outer tool wait, use `long-task-wait/claude-job`: launch and status are short calls, model execution stays inside the existing `implementation-orchestrator.mjs`, 60 minutes is warning-only, one repository has one active job, out-of-scope changes fail closed, and only the outer runner may create DONE.
 
@@ -228,7 +229,7 @@ The foundation does not require an always-on hourly GitHub Actions schedule in e
 - Remote Desktop Commander の one-shot コマンドはシェル層を1つにする。必要でない限り、PowerShell の中で `powershell -Command` を入れ子にしない。
 - one-shot セッションが実際に終了したことを確認する（残留プロセスを放置しない）。
 - 意図的に起動した長寿命の dev server / tunnel は自動 kill しない。
-- ローカル運用シミュレーションは `tools/run-local-ops-simulation.ps1` をオンデマンドで実行する（実 Claude・GitHub 書き込み・merge・scheduled task を使わない）。
+- ローカル運用シミュレーションは `tools/run-local-ops-simulation.ps1` をオンデマンドで実行する。`-Mode Core` は日常的な高速経路として推奨されるが、引数省略時の既定は後方互換のため `-Mode Full` のままとする（`Core`を既定と呼ばない）。`Full`は自己クリーンアップする一時的な合成Scheduled Taskを作成する場合がある。両モードとも実Claude・GitHub書き込み・mergeは使わない。
 
 ## Anti-Loop
 
@@ -280,7 +281,7 @@ Verification placement follows property equivalence: deterministic source checks
 
 人間がUI画像を「採用」「基準」「これでいく」と明示した場合、その画像は会話内だけに残さず、application repositoryの `docs/ui-reference/` にproject-local正本として保存する。詳細な保存形式・archive・再現検証は `handoff` skillの Approved UI Reference Authority を正本とする。
 
-For approved-reference UI reproduction, keep using the existing Canonical Contract / Human Decision Sync / UI_REFERENCE_REPRODUCTION path. Preflight protects the approved reference, numeric criteria, fixed capture conditions, FINAL visual-diff thresholds, fixed-shape registry, and canonical image/SVG assets through protectedPaths/forbiddenScope. EARLY and MILESTONE remain numeric-centered. FINAL requires DOM/CSS numeric PASS plus a direct approved-reference-vs-actual app screenshot PASS and every registered fixed-shape region PASS; a measurement overlay or annotated reference is never actual-screen evidence. Any numeric, visual, shape, canonical-freshness, or protected-input FAIL blocks PR Ready/merge Ready.
+For approved-reference UI reproduction, keep using the existing Canonical Contract / Human Decision Sync / UI_REFERENCE_REPRODUCTION path. Separate canonicalization from implementation: before source changes, reproduction schema v3 must carry a protected `COMPLETE` canonicalization record based on `REFERENCE_IMAGE_MEASURED`, with zero unresolved ambiguities and explicit coverage for layout geometry, spacing, typography, colors, and fixed shapes. Preflight protects that record together with the approved reference, numeric criteria, fixed capture conditions, FINAL visual-diff thresholds, fixed-shape registry, and canonical image/SVG assets through protectedPaths/forbiddenScope. EARLY and MILESTONE remain numeric-centered. FINAL requires DOM/CSS numeric PASS plus a direct approved-reference-vs-actual app screenshot PASS and every registered fixed-shape region PASS; a measurement overlay or annotated reference is never actual-screen evidence. Any canonicalization, numeric, visual, shape, canonical-freshness, or protected-input FAIL blocks implementation continuation / PR Ready / merge Ready.
 
 ### Human Decision Sync
 
