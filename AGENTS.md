@@ -78,7 +78,7 @@ Tier 0 安全原則は上の CORE セクションを常時適用し、詳細ル�
 - Project Intake（新規project・意味ある新機能の入口）: 実装前に`project-intake`で目的・scope・assumption・未解決の人間判断をbrief化する。未解決質問0件かつ対応するHuman Decision Syncが`CONFIRMED / EXPLICIT_HUMAN`になった後だけ既存開発workflowへ進む。
 - 変更前に `preflight-audit` を通し、正本・project identity・安全境界・作業所有権を確認する。local source writeの開始時は `work-start-guard.mjs --mode write` で、clean worktree・live default branch・branch base・AGENTS/Foundation currentnessを機械確認する。読み取り専用監査は `--mode read-only` でdirty状態を破壊せず観測できる。
 - `STAGED_REALITY_GATE_REQUIRED=YES`。実装は EARLY / MILESTONE / FINAL REALITY の該当checkを飛ばさない。`UI_REFERENCE_REPRODUCTION`ではstate-bound `UI_MEASUREMENT`と`PROTECTED_FILES_CHECK`を必須とし、同じcheck IDが3回連続で実測FAILならSTOPする。
-- For approved-reference UI reproduction, protect the reference/version, numeric dimensions/tolerances, inspection script, fixed capture conditions (viewport/zoom/DPR/font/app-window), synthetic fixture, overlay proof, FINAL visual thresholds, fixed-shape registry, and canonical shape assets. EARLY/MILESTONE are numeric-centered; FINAL requires numeric PASS + direct approved-reference-vs-actual screenshot PASS + all fixed-shape region comparisons PASS. Overlay/annotated-reference images cannot substitute for an actual screenshot.
+- For approved-reference UI reproduction, canonicalization and implementation are separate phases. Before source changes, reproduction schema v3 must have a protected `COMPLETE` `REFERENCE_IMAGE_MEASURED` canonicalization record with zero unresolved ambiguities and explicit coverage for layout geometry, spacing, typography, colors, and fixed shapes. Protect it together with the reference/version, numeric dimensions/tolerances, inspection script, fixed capture conditions (viewport/zoom/DPR/font/app-window), synthetic fixture, overlay proof, FINAL visual thresholds, fixed-shape registry, and canonical shape assets. EARLY/MILESTONE are numeric-centered; FINAL requires numeric PASS + direct approved-reference-vs-actual screenshot PASS + all fixed-shape region comparisons PASS. Overlay/annotated-reference images cannot substitute for an actual screenshot.
 - 長時間・複数段階作業の終了前は `stagnation-watch.mjs --response-intent terminate` の terminal state に従う。
 - 共通ルール変更は `common-rule-integration-audit` を先に実行し、既存へ統合できる場合は新しいルールを増やさない。
 - Human Decision Sync / Canonical Contract が有効なprojectでは、会話記憶より repository の CURRENT / CONFIRMED な正本を優先する。
@@ -89,6 +89,7 @@ Tier 0 安全原則は上の CORE セクションを常時適用し、詳細ル�
 ### AI役割の既定値
 
 現在の既定ルーティングは、qualified な間は Claude CLI を source 実装の第一経路、ChatGPT を仕様整理・オーケストレーション・最終監査とする。
+`ChatGPT Work` は第一選択にせず、通常チャット + 既存の安全な local/connector 経路で完結できる作業を優先し、長時間・切断耐性が必要な処理だけ既存 Job Runner へ移す。詳細は `OPERATIONS.md` を正本とする。
 Codex の write は別途 qualification 完了後のみ。Gemini / Antigravity は別途 qualification されるまで独立レビュー・代替分析を主用途とする。
 これは固定担当ではなく、`OPERATIONS.md` と `learnings/L-0006.md` の安全・費用・能力・権限・実行環境の判定を正本とする。
 
