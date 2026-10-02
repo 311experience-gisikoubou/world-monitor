@@ -148,6 +148,7 @@ The gate classifies the changed files into one of these profiles:
 Classification notes:
 
 - The repository-root `index.html` is always treated as frontend.
+- A repository-root `*.js|*.mjs|*.cjs` runtime file is treated as a frontend companion only when the same changed-file set already contains a strong frontend anchor such as root `index.html`, `app/`, `src/`, `web/`, `frontend/`, `ui/`, or a recognized frontend verification script. A root runtime JS file by itself remains `UNKNOWN`. Root filenames with clear server/backend/API/build/config/test/spec/tool/script/bundler/lint/e2e semantics remain `UNKNOWN` even beside a frontend anchor.
 - Not every `scripts/*.ts|.js|.mjs` file is treated as frontend. A `scripts/*` file is only classified as frontend when its filename clearly combines a frontend/UI/browser/render/layout/visual/home-stage/home-invoice purpose with verification/test/selftest/smoke/check/scale semantics (for example `scripts/home-stage-scale.selftest.ts` or `scripts/home-invoice-pending.selftest.ts`). Other `scripts/*` files fall through to `UNKNOWN` and require `STOP`.
 - Dependency, migration, governance/docs, and backend classification still take priority over this frontend-verification-script predicate.
 

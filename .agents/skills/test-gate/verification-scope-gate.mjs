@@ -40,6 +40,7 @@ const MIGRATION_RE = /(^|\/)(migrations?|schema|database|db)(\/|$)|\.sql$/i;
 const FRONTEND_RE = /(^|\/)(src|app|web|frontend|ui|components?|pages?|views?|styles?)(\/|$).+\.(ts|tsx|js|jsx|mjs|cjs|vue|svelte|css|scss|sass|less|html)$/i;
 const ROOT_INDEX_HTML_RE = /^index\.html$/i;
 const FRONTEND_VERIFICATION_SCRIPT_RE = /^scripts\/(?=[^/]*\.(?:ts|js|mjs)$)(?=[^/]*(?:frontend|ui|browser|render|layout|visual|home-stage|home-invoice))(?=[^/]*(?:verify|verification|selftest|test|smoke|check|scale))[^/]+\.(?:ts|js|mjs)$/i;
+const ROOT_FRONTEND_JS_COMPANION_RE = /^(?!.*(?:^|[._-])(?:server|backend|api|build|config|test|tests|spec|tool|tools|script|scripts|webpack|vite|rollup|eslint|jest|playwright|cypress)(?:[._-]|$))[^/]+\.(?:js|mjs|cjs)$/i;
 const BACKEND_RE = /(^|\/)(src-tauri|backend|server|api|services?|domain|repositories?)(\/|$)|\.(rs|go|py|java|kt|cs|rb|php)$/i;
 
 function unique(values) {
@@ -56,6 +57,10 @@ function validRepoPath(value) {
 }
 
 export function classifyFiles(changedFiles) {
+  const hasStrongFrontendAnchor = changedFiles.some(file =>
+    ROOT_INDEX_HTML_RE.test(file) || FRONTEND_VERIFICATION_SCRIPT_RE.test(file) || FRONTEND_RE.test(file)
+  );
+
   const flags = {
     docs: false,
     governance: false,
@@ -91,6 +96,10 @@ export function classifyFiles(changedFiles) {
       continue;
     }
     if (ROOT_INDEX_HTML_RE.test(file) || FRONTEND_VERIFICATION_SCRIPT_RE.test(file) || FRONTEND_RE.test(file)) {
+      flags.frontend = true;
+      continue;
+    }
+    if (hasStrongFrontendAnchor && ROOT_FRONTEND_JS_COMPANION_RE.test(file)) {
       flags.frontend = true;
       continue;
     }

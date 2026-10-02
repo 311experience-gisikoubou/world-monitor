@@ -15,6 +15,18 @@ assert.equal(classifyFiles(['templates/.claude/skills/test-gate/SKILL.md.templat
 assert.equal(classifyFiles(['templates/AGENTS.index.md.template']).profile, 'GOVERNANCE_ONLY');
 assert.equal(classifyFiles(['templates/ui-reference/reproduction/FIXED_SHAPES.json.template']).profile, 'GOVERNANCE_ONLY');
 
+// Root runtime JS is accepted only as a companion to an already-clear frontend change.
+assert.equal(classifyFiles(['app.js']).profile, 'UNKNOWN');
+assert.equal(classifyFiles(['orders.js']).profile, 'UNKNOWN');
+assert.equal(classifyFiles(['index.html', 'app.js', 'orders.js']).profile, 'FRONTEND_ONLY');
+assert.equal(classifyFiles(['app/visual-snapshot.js', 'app.js', 'orders.js']).profile, 'FRONTEND_ONLY');
+
+// Tooling/backend/test-like root JS remains fail-closed even beside a frontend anchor.
+assert.equal(classifyFiles(['index.html', 'server.js']).profile, 'UNKNOWN');
+assert.equal(classifyFiles(['index.html', 'build.js']).profile, 'UNKNOWN');
+assert.equal(classifyFiles(['index.html', 'config.js']).profile, 'UNKNOWN');
+assert.equal(classifyFiles(['index.html', 'visual.test.js']).profile, 'UNKNOWN');
+
 let result = evaluate({
   changedFiles: ['docs/guide.md'],
   plannedChecks: ['DIFF_HYGIENE', 'DOCS_CONSISTENCY'],
@@ -37,6 +49,13 @@ result = evaluate({
   changedFiles: ['src/main.ts'],
   plannedChecks: ['DIFF_HYGIENE', 'TARGETED_SELFTEST', 'FRONTEND_BUILD'],
 });
+assert.equal(result.decision, 'PROCEED');
+
+result = evaluate({
+  changedFiles: ['index.html', 'app/visual-snapshot.js', 'app.js', 'orders.js', 'scripts/visual-snapshot-frontend.test.js'],
+  plannedChecks: ['DIFF_HYGIENE', 'TARGETED_SELFTEST', 'FRONTEND_BUILD'],
+});
+assert.equal(result.profile, 'FRONTEND_ONLY');
 assert.equal(result.decision, 'PROCEED');
 
 result = evaluate({
