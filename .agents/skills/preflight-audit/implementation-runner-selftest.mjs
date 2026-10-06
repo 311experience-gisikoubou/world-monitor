@@ -20,6 +20,7 @@ const subscriptionRunnerPath = path.join(runnerDir, 'claude-subscription-runner.
 let subscriptionSource = fs.readFileSync(subscriptionRunnerPath, 'utf8');
 if (!subscriptionSource.includes(trustedClaudeHash)) throw new Error('trusted Claude hash missing from subscription runner');
 const inventoryUrl = pathToFileURL(path.join(runnerDir, 'ai-provider-inventory.mjs')).href;
+const researchGateUrl = pathToFileURL(path.join(runnerDir, 'research-gate.mjs')).href;
 subscriptionSource = subscriptionSource
   .replace("from './ai-provider-inventory.mjs';", `from '${inventoryUrl}';`)
   .replace(trustedClaudeHash, nodeHash)
@@ -30,7 +31,8 @@ fs.writeFileSync(testSubscriptionPath, subscriptionSource, 'utf8');
 let implSource = fs.readFileSync(runnerPath, 'utf8');
 implSource = implSource
   .replace("from './ai-provider-inventory.mjs';", `from '${inventoryUrl}';`)
-  .replace("from './claude-subscription-runner.mjs';", `from '${pathToFileURL(testSubscriptionPath).href}';`);
+  .replace("from './claude-subscription-runner.mjs';", `from '${pathToFileURL(testSubscriptionPath).href}';`)
+  .replace("from './research-gate.mjs';", `from '${researchGateUrl}';`);
 const testImplPath = path.join(tempRoot, 'implementation-runner-under-test.mjs');
 fs.writeFileSync(testImplPath, implSource, 'utf8');
 
@@ -39,6 +41,51 @@ const {
   readBoundedTaskInput, verifyFeatureRepository, verifyWorktreeClean, verifyRepositoryIdentity,
   readHeadSha, computeChangeSetSha256, validScopePattern, changedPathsWithinScope, changedPathsInForbiddenScope,
 } = await import(pathToFileURL(testImplPath).href);
+const { computeConstraintsDigest } = await import(researchGateUrl);
+
+function minimalPassChecklist() {
+  return ['safety', 'dataPreservation', 'existingOverlap'].map((id) => ({
+    id, status: 'PASS', applicable: true,
+    justification: `${id} looks fine for this bounded fixture edit.`,
+    primarySourceRef: 'https://example.invalid/evidence',
+  }));
+}
+// A minimal, honest BYPASS_LIGHT-shaped research envelope bound to the exact
+// taskId/repository/scope the runner will independently re-evaluate it
+// against. runClaudeImplementationTask always recomputes this from the raw
+// evidence; it is never trusted on a caller-asserted result.
+function researchFor(taskId, overrides = {}) {
+  const repository = overrides.repository || { owner: 'acme', name: 'widgets' };
+  const scope = overrides.scope || ['README.md', 'IMPL_TOUCHED.txt'];
+  const constraints = overrides.constraints || [];
+  const checklist = overrides.checklist || minimalPassChecklist();
+  return {
+    evidence: {
+      schemaVersion: 1,
+      evidenceBinding: {
+        taskId, proposalId: 'proposal-1', repository, scope, constraints,
+        constraintsDigestSha256: computeConstraintsDigest(constraints),
+        assessedAtUtcMs: Date.now(),
+        maxEvidenceAgeMs: 24 * 60 * 60 * 1000,
+      },
+      triggers: {
+        newCloudApiServiceAppLibraryCliAccount: false,
+        authNetworkPrivacySecurityEncryptionBackupStorageChange: false,
+        protectedMedicalData: false,
+        feeOrFreeQuota: false,
+        osBrowserCompatibility: false,
+        largeTransfer: false,
+        irreversibleOperation: false,
+        ongoingMaintenance: false,
+      },
+      noTriggerAssessment: { reasonCode: 'LOCAL_SAFE_EDIT_NO_RISK_SIGNAL', justification: 'Bounded local source edit fixture for runner selftest.' },
+      checklist,
+      humanTopConditions: [],
+      deepResearch: null,
+    },
+    context: { proposalId: 'proposal-1', constraints, humanTopConditions: [] },
+  };
+}
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 function git(cwd, args) {
@@ -58,8 +105,11 @@ try {
     schemaVersion: 1, taskId: 'impl-1', capability: 'implementation', dataClass: 'source-only',
     prompt: 'Fix the bug in source only.', repoRoot: tempRoot, branch: 'feat/example',
     allowedScope: ['README.md', 'src/**'], repository: { owner: 'acme', name: 'widgets' },
+    research: researchFor('impl-1', { scope: ['README.md', 'src/**'] }),
   };
   assert(validateImplementationTask(basePayload).length === 0, 'valid payload rejected');
+  assert(validateImplementationTask({ ...basePayload, research: undefined }).includes('research_not_object'),
+    'the direct exported source writer must never be bypassable by omitting the research envelope');
   assert(validateImplementationTask({ ...basePayload, extra: 1 }).includes('unknown_field'), 'unknown field must stop');
   assert(validateImplementationTask({ ...basePayload, dataClass: 'protected' }).includes('dataClass_invalid'), 'protected data must stop');
   assert(validateImplementationTask({ ...basePayload, branch: 'main' }).length === 0, 'branch schema does not itself reject protected names (repo check does)');
@@ -209,10 +259,42 @@ process.stdin.on('end', () => {
     schemaVersion: 1, taskId: 'impl-1', capability: 'implementation', dataClass: 'source-only',
     prompt: 'Fix the bug in source only.', repoRoot: repoDir, branch: 'feat/example',
     allowedScope: ['README.md', 'IMPL_TOUCHED.txt'], repository: { owner: 'acme', name: 'widgets' },
+    research: researchFor('impl-1'),
   };
+
+  // --- Research Gate blocks BEFORE any provider probe/invocation: the direct runner cannot be bypassed ---
+  fs.writeFileSync(logPath, '', 'utf8');
+  const researchBlockedCountBefore = 0;
+  const researchFailStop = runClaudeImplementationTask({
+    ...implPayload,
+    research: researchFor('impl-1', { checklist: [
+      { id: 'safety', status: 'FAIL', applicable: true, justification: 'A real safety concern exists.', primarySourceRef: 'https://example.invalid/evidence' },
+      { id: 'dataPreservation', status: 'PASS', applicable: true, justification: 'Fine.', primarySourceRef: 'https://example.invalid/evidence' },
+      { id: 'existingOverlap', status: 'PASS', applicable: true, justification: 'Fine.', primarySourceRef: 'https://example.invalid/evidence' },
+    ] }),
+  }, { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
+  assert(researchFailStop.result === 'STOP' && researchFailStop.code === 'RESEARCH_GATE_BLOCKED',
+    `a raw research-gate FAIL must block before provider invocation: ${JSON.stringify(researchFailStop)}`);
+  const researchBlockedCountAfter = fs.readFileSync(logPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).length;
+  assert(researchBlockedCountAfter === researchBlockedCountBefore, 'a research-gate block must never invoke Claude (no auth probe, no run)');
+
+  // Mismatched evidence binding (wrong taskId) must also block before invocation, never pass on name alone.
+  const researchMismatchStop = runClaudeImplementationTask({
+    ...implPayload,
+    research: researchFor('some-other-task'),
+  }, { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
+  assert(researchMismatchStop.result === 'STOP' && researchMismatchStop.code === 'RESEARCH_GATE_BLOCKED',
+    `mismatched research evidence binding must block before provider invocation: ${JSON.stringify(researchMismatchStop)}`);
+
+  // A bare/direct caller cannot bypass by omitting the research envelope entirely.
+  const { research: _omitted, ...implPayloadWithoutResearch } = implPayload;
+  const researchMissingStop = runClaudeImplementationTask(implPayloadWithoutResearch, { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
+  assert(researchMissingStop.result === 'STOP' && researchMissingStop.code === 'TASK_SCHEMA_INVALID',
+    `an omitted research envelope must fail schema-closed, never silently bypass: ${JSON.stringify(researchMissingStop)}`);
 
   const ok = runClaudeImplementationTask(implPayload, { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
   assert(ok.result === 'COMPLETED', JSON.stringify(ok));
+  assert(ok.researchGate?.result === 'BYPASS_LIGHT', `completed run must record its actual re-evaluated research gate result: ${JSON.stringify(ok.researchGate)}`);
   assert(ok.output === 'Edited README.md and added IMPL_TOUCHED.txt', JSON.stringify(ok));
   assert(ok.evidence.toolBoundary === 'SOURCE_EDIT_ONLY_ENFORCED', 'tool evidence not closed');
   assert(ok.evidence.repositoryBoundary === 'FEATURE_BRANCH_ONLY_VERIFIED', 'repository evidence not closed');
@@ -280,7 +362,7 @@ process.stdin.on('end', () => {
   const notRepoStop = runClaudeImplementationTask({ ...implPayload, repoRoot: notGitDir }, { desc: desc(), envSource: cleanEnv });
   assert(notRepoStop.code === 'REPO_NOT_GIT_WORK_TREE', 'non-git repoRoot must stop before invoking Claude');
 
-  const wrongRepoIdentityStop = runClaudeImplementationTask({ ...implPayload, repository: { owner: 'not-acme', name: 'widgets' } }, { desc: desc(), envSource: cleanEnv });
+  const wrongRepoIdentityStop = runClaudeImplementationTask({ ...implPayload, repository: { owner: 'not-acme', name: 'widgets' }, research: researchFor('impl-1', { repository: { owner: 'not-acme', name: 'widgets' } }) }, { desc: desc(), envSource: cleanEnv });
   assert(wrongRepoIdentityStop.code === 'REPOSITORY_IDENTITY_MISMATCH', 'wrong repository identity must stop before invoking Claude');
 
   const baselineCount = fs.readFileSync(logPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).length;

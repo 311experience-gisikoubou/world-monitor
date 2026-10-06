@@ -114,6 +114,40 @@ process.stdin.on('end', () => {
     $jobDir = Join-Path $repo '.ai-jobs\job1'
     New-Item -ItemType Directory -Force -Path $jobDir | Out-Null
     [IO.File]::WriteAllText((Join-Path $jobDir 'prompt.md'), "ORIGINAL OBJECTIVE`n", $utf8)
+    $clarity = [ordered]@{
+        schemaVersion = 1; taskId = 'claude-job-job1'
+        instructions = @([ordered]@{ id = 'human-1'; kind = 'INSTRUCTION'; summary = 'Implement the bounded synthetic selftest task.' })
+        unlistedAssumptionsPresent = $false; ambiguities = @()
+    }
+    [IO.File]::WriteAllText((Join-Path $jobDir 'instruction-clarity.json'), ($clarity | ConvertTo-Json -Depth 8), $utf8)
+    $research = [ordered]@{
+        evidence = [ordered]@{
+            schemaVersion = 1
+            evidenceBinding = [ordered]@{
+                taskId = 'claude-job-job1'; proposalId = 'proposal-1'
+                repository = [ordered]@{ owner = 'o'; name = 'r' }
+                scope = @('src/**'); constraints = @()
+                constraintsDigestSha256 = 'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B85'
+                assessedAtUtcMs = [int64]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+                maxEvidenceAgeMs = 86400000
+            }
+            triggers = [ordered]@{
+                newCloudApiServiceAppLibraryCliAccount = $false; authNetworkPrivacySecurityEncryptionBackupStorageChange = $false
+                protectedMedicalData = $false; feeOrFreeQuota = $false; osBrowserCompatibility = $false
+                largeTransfer = $false; irreversibleOperation = $false; ongoingMaintenance = $false
+            }
+            noTriggerAssessment = [ordered]@{ reasonCode = 'LOCAL_SAFE_EDIT_NO_RISK_SIGNAL'; justification = 'Bounded synthetic selftest task.' }
+            checklist = @(
+                [ordered]@{ id = 'safety'; status = 'PASS'; applicable = $true; justification = 'Fine.'; primarySourceRef = 'https://example.invalid/evidence' }
+                [ordered]@{ id = 'dataPreservation'; status = 'PASS'; applicable = $true; justification = 'Fine.'; primarySourceRef = 'https://example.invalid/evidence' }
+                [ordered]@{ id = 'existingOverlap'; status = 'PASS'; applicable = $true; justification = 'Fine.'; primarySourceRef = 'https://example.invalid/evidence' }
+            )
+            humanTopConditions = @()
+            deepResearch = $null
+        }
+        context = [ordered]@{ proposalId = 'proposal-1'; constraints = @(); humanTopConditions = @() }
+    }
+    [IO.File]::WriteAllText((Join-Path $jobDir 'research.json'), ($research | ConvertTo-Json -Depth 10), $utf8)
     $st = [ordered]@{
         job_id = 'job1'; task = 'selftest'; state = 'STARTING'; worktree = $repo; branch = $(if ($branchOverride) { $branchOverride } else { 'job/selftest' })
         root_base_commit = $base; scope_paths = @('src/**'); test_command = 'node check.js'

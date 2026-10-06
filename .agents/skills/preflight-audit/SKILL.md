@@ -34,6 +34,38 @@ Self-test:
 node .agents/skills/preflight-audit/work-start-guard-selftest.mjs
 ```
 
+### UI verification browser preflight
+
+Before a UI/screenshot/CDP verification run starts a Foundation-managed Chrome, run the shared orphan scan. It recognizes only runs carrying the Foundation owner marker and managed metadata below the dedicated temporary root; ordinary Chrome, Edge, unmarked Playwright profiles, and a currently active run are outside cleanup authority.
+
+```text
+node .agents/skills/test-gate/ui-browser-lifecycle.mjs orphan-cleanup --state-id <stateId> --pretty
+```
+
+A run with a live launcher, a fresh heartbeat, or the current run ID is protected. Age is diagnostic only: parentless managed runs older than one hour are warning candidates and older than 24 hours are abnormal, but age alone never grants process-stop authority. If ownership, run state, or profile scope is uncertain, leave the browser untouched and report the uncertainty.
+
+## Instruction Clarity Gate
+
+Before any source-writing `implementation`, `bugfix`, `refactor`, or `design-with-source-write` task, turn the current human natural-language/spoken instruction into the closed machine-readable clarity ledger consumed by:
+
+```text
+node .agents/skills/preflight-audit/instruction-clarity-gate.mjs --input <clarity.json> --pretty
+```
+
+The ledger must contain the explicit human instructions/constraints, every known ambiguity, every AI assumption, and references to already-recorded human clarifications. Unknown fields/vocabulary, hidden or unlisted assumptions, contradictory classifications, task-ID mismatch, or malformed input fail closed.
+
+- Classify as `MATERIAL` when different interpretations can materially change approved scope/baseline, user-visible design/behavior, business meaning/workflow, safety/privacy/data handling, recurring cost, destructive/irreversible action, or another genuine human value decision. `MATERIAL` ambiguity is human-owned and must be `HUMAN_CLARIFICATION_RECORDED` before source implementation.
+- Classify as `NON_MATERIAL` only for AI-resolvable technical detail or a harmless, reversible detail that does not change approved intent. These remain AI-owned and must not be bounced to a non-engineer human. If an assumption is used, record it explicitly with justification; hidden assumptions are prohibited.
+- A clarification already resolved by the human is evidence to preserve and continue from, not a reason to ask again.
+- `implementation-orchestrator.mjs` evaluates this gate before provider probing/source-writer execution. `implementation-route-receipt.mjs` independently requires the same clarity evidence on source-write pre/final receipts. Missing or failed clarity evidence cannot verify as merge-ready.
+- This does not replace Human Decision Sync, Canonical Contract, Approved Baseline Preservation, UI reference reproduction, cost/privacy/destructive gates, or merge authorization. Those stronger controls remain conjunctive.
+
+Self-test:
+
+```text
+node .agents/skills/preflight-audit/instruction-clarity-gate-selftest.mjs .agents/skills/preflight-audit/instruction-clarity-gate.mjs
+```
+
 ## Approved Baseline Preservation
 
 Before implementation, migration, redesign, tool-to-tool transfer, UI recreation, specification rewrite, or any other work derived from a human-approved baseline:
@@ -59,6 +91,57 @@ Before substantial custom implementation or adoption of a new dependency/service
 - OSS research is evidence for the technical adoption decision, not adoption authorization. Existing recurring-cost, external-data-route, lifecycle-responsibility, workflow-impact, business-policy, and other human approval boundaries remain unchanged.
 
 Record the result as `REUSE_EXISTING`, `ADOPT_OSS`, `COMPOSE_EXISTING`, `CUSTOM_MINIMAL`, or `NOT_APPLICABLE`, with the decisive reason. This is an `OPERATIONAL` preflight requirement; do not claim that every repository mechanically enforces the external research step unless a separate executable gate proves it.
+
+## Research Gate
+
+After Project Intake and before any source writer / install / account / config / external adoption, `.agents/skills/preflight-audit/research-gate.mjs` is the single machine-readable checklist authority for this closed structured risk assessment. It never invokes a provider and never grants write/install/merge authority; it only returns `ADOPT`, `TRIAL_REQUIRED` (narrow synthetic trial only), `REJECT`, or `STOP`.
+
+```text
+node .agents/skills/preflight-audit/research-gate.mjs --input <research-gate.json> --pretty
+```
+
+- A closed set of triggers (new cloud/API/service/app/library/CLI/account; auth/network/privacy/security/encryption/backup/storage change; protected medical data; fee/free quota; OS/browser compatibility; large transfer; irreversible operation; ongoing maintenance) decides whether the full checklist applies or a `noTriggerAssessment` bypass is used; a genuinely local/safe edit still carries a mandatory minimum-safety checklist, never an unexamined pass.
+- Every checklist row records exactly one of `PASS`/`FAIL`/`UNKNOWN`, plus a separate `applicable` boolean and (when `applicable: false`) an explicit `inapplicableReason`. A missing/unknown applicability determination is never treated as `PASS`, and an active human top condition's relevant row can never be marked inapplicable to bypass it.
+- A new local dependency (e.g. a plain library with no external-service/account/network/auth footprint) only needs ordinary/basic Research; `newCloudApiServiceAppLibraryCliAccountRiskProfile: LOCAL_LOW_RISK` relaxes the Deep-Research-equivalent requirement for that trigger only. Every other deep-research trigger (auth/security/protected-medical-data/fees/large-transfer/browser-risk) remains mandatory regardless of that profile, so a genuinely high-risk change cannot hide behind a "simple dependency" declaration.
+- Deep-Research-equivalent evidence (`deepResearch.primary` / `.adversarial`) requires a `providerId`, a distinct `researchSessionRef` (the actual execution/session/route identifier), and an `evidenceRef` (the primary-source reference) for each pass used; a bare provider name or evidence string alone is not authenticated execution proof. Same-provider adversarial research requires an explicit rationale.
+- Human top conditions (`ZERO_ADDITIONAL_COST`, `BILLING_ACCOUNT_NOT_ALLOWED`, `NO_PROTECTED_DATA_PERMITTED`, `OTHER`) are each enforced independently against the raw checklist evidence — `BILLING_ACCOUNT_NOT_ALLOWED` alone rejects a billing-required service without needing `ZERO_ADDITIONAL_COST` also active, and vice versa. `OTHER` is always surfaced, never silently dropped.
+- A raw `FAIL` always out-ranks a missing second/adversarial research pass and an `UNKNOWN`/trial path: a second AI not having run yet must never soften a `FAIL` into a trial suggestion.
+- `evaluateResearchGateBound(input, expected)` is the required orchestrator/route-receipt entry point: it refuses to run unless the caller independently supplies the full expected `taskId`/`proposalId`/`repository`/`scope`/`constraints` (and, when relevant, `requiredActiveTopConditionIds`) it already holds for the current task, so raw evidence is never trusted to validate itself and a dropped/replaced human top condition fails closed.
+- The result's `report` field (used AI, source list, PASS/FAIL/UNKNOWN counts, blocker, human operations, cost, installs/accounts, maintenance, removal, recommendation) is derived only from the validated raw evidence, never from an arbitrary caller-supplied outcome.
+- Receiving, binding, and digest-checking this evidence (`evaluateResearchGateBound`/`evaluateResearchEnvelope`, the implementation-task-packet forwarding below, and the receipt checks in `implementation-route-receipt.mjs`) proves only that the recorded evidence was not silently altered and is bound to the current task/scope/conditions. It is never proof that an AI actually executed the claimed research or that an underlying real-world/official fact is true -- that evidentiary weight comes only from the cited `primarySourceRef`/`evidenceRef` sources and an honest `researchSessionRef`. These checks also do not universally intercept a browser turn before it starts typing; see the same honesty boundary already documented for `implementation-route-receipt.mjs` below.
+- `.agents/skills/preflight-audit/ai-task-router.mjs` role-routes `researchPrimary`/`researchAdversarial` (never repo-write/source-write/install/merge authority), `designer`, `executor`, and `reviewer` through the same safety/capability/permission/cost/capacity qualification used for executor selection. The router holds no permanent per-vendor priority for any of these roles; it ranks whichever routes are currently `AVAILABLE`/`SAFE_CONFIRMED` by fit/cost/capacity/permissions/data/quality.
+- For Google-domain work (Apps Script, Firebase, Workspace, Drive, and similar), prefer a qualified Gemini route for the adversarial research pass when one is actually `AVAILABLE`/`SAFE_CONFIRMED` through the router, since a Google-native route can plausibly add value researching Google's own ecosystem. On the current readiness evidence Gemini is not qualified (see Machine-readable adapter readiness below), so this is forward guidance, not a claim that Gemini is promoted today. When no qualified Gemini route exists, record the safer available route actually used (per the `deepResearch.adversarial` evidence contract above) instead of asserting that Gemini ran.
+
+Self-test:
+
+```text
+node .agents/skills/preflight-audit/research-gate-selftest.mjs .agents/skills/preflight-audit/research-gate.mjs
+```
+
+A real synthetic fixture + executable A-G simulation exercises this gate (plus `environment-lifecycle-audit.mjs`, `implementation-orchestrator.mjs`, and `implementation-route-receipt.mjs`) against a recurring real-world shape: an Apps Script `ContentService`/`HtmlService` web app opened from an iPad Safari anonymous/multi-login session. It cites official Google documentation for the `script.googleusercontent.com` one-time redirect and known multi-account limitations, and explicitly marks that no live iPad/Safari session was measured (`LIVE_IPAD_VERIFICATION.verified: false`); the simulated PASS/REJECT/TRIAL_REQUIRED outcomes are checklist evidence, never a substitute for an actual device/session measurement. It is a fixture + simulation runner, not a second gate or skill.
+
+```text
+node .agents/skills/preflight-audit/fixtures/apps-script-ipad-safari-redirect-fixture.mjs --pretty
+node .agents/skills/preflight-audit/fixtures/apps-script-ipad-safari-redirect-fixture-selftest.mjs
+```
+
+### Basic local dependency alternatives / security / maintenance audit and environment lifecycle
+
+A new local dependency, installed tool, or other environment footprint still needs the existing Existing Solution / OSS Reuse Check above (alternatives, license, data egress, security/supply-chain risk, maintenance health, removal burden) even when `research-gate.mjs`'s `LOCAL_LOW_RISK` profile relaxes only the Deep-Research-equivalent requirement for that one trigger. `.agents/skills/preflight-audit/environment-lifecycle-audit.mjs` adds two small, observation/record-only companions to that review; it never installs, uninstalls, stops, deletes, or revokes anything itself, and it never grants the install/account authority that remains with the human/Research Gate boundaries above.
+
+```text
+node .agents/skills/preflight-audit/environment-lifecycle-audit.mjs --environment-growth --input <growth.json> --pretty
+node .agents/skills/preflight-audit/environment-lifecycle-audit.mjs --cleanup-audit --input <cleanup.json> --pretty
+```
+
+- `--environment-growth` records each new local footprint (installed tool/package/service/etc.) with its `item`, `need`, `alternative` considered, data `residency`, network `egress`, `autoUpdate` behavior, `permissions` (`SAFE`/`UNKNOWN`/`UNSAFE`), approximate `size`, and how to `remove` and `stop` it. Only `SAFE` permissions proceed; `UNKNOWN` and `UNSAFE` are rejected outright rather than silently treated as acceptable.
+- `--cleanup-audit` is a PoC Cleanup Audit inventory across a closed list of 19 categories (`folders`, `clones`, `worktrees`, `temp`, `downloads`, `apps`, `cli`, `packages`, `backgroundProcesses`, `listeners`, `firewall`, `scheduledTasks`, `services`, `extensions`, `oauth`, `tokens`, `publicUrls`, `testDeployments`, `cloudResources`). Every category must be explicitly accounted for, either as classified rows (`KEEP` / `STOP` / `DELETE_CANDIDATE` / `HUMAN_DECISION_REQUIRED`, each with a `rationale`) or the literal `NONE_FOUND`; a missing category fails closed rather than being read as "nothing to report". Existing human/account/production boundaries decide what actually happens to a `DELETE_CANDIDATE` or `HUMAN_DECISION_REQUIRED` row; this module only classifies.
+
+Self-test:
+
+```text
+node .agents/skills/preflight-audit/environment-lifecycle-audit-selftest.mjs .agents/skills/preflight-audit/environment-lifecycle-audit.mjs
+```
 
 ## AI Route Selection
 
@@ -249,6 +332,37 @@ node .agents/skills/preflight-audit/implementation-runner-selftest.mjs .agents/s
 node .agents/skills/preflight-audit/implementation-route-receipt-selftest.mjs .agents/skills/preflight-audit/implementation-route-receipt.mjs
 node .agents/skills/preflight-audit/implementation-orchestrator-selftest.mjs .agents/skills/preflight-audit/implementation-orchestrator.mjs
 ```
+
+### Bounded Agent Cycle (trial)
+
+`agent-cycle.mjs` is a thin coordinator over existing mechanisms, not a second agent platform. It reads the current approved goal and next step from Project Working Memory, rejects stale candidates, deterministically selects one eligible bounded task, and then either delegates an `INLINE` source task to the existing `implementation-orchestrator.mjs` or returns a `LONG_TASK_HANDOFF_REQUIRED` packet for the existing Job Runner path.
+
+The cycle runs at most one selected task per invocation. `PLAN` never executes source work. `EXECUTE` never gains push, merge, paid-route, production, or human-decision authority. If an inline task declares `onSuccessNextStep`, the cycle advances only the existing Project Working Memory focus after source execution; failure to update that memory is a STOP rather than a success claim. Final verification remains owned by staged reality / test-gate / final-pr-audit, so a completed cycle explicitly reports that verification is still required.
+
+```text
+<closed-agent-cycle-json-stream> | node .agents/skills/preflight-audit/agent-cycle.mjs
+node .agents/skills/preflight-audit/agent-cycle-selftest.mjs
+```
+
+The v1.1 long-task bridge stays inside this existing surface. `agent-job-bridge.mjs` does not start a second runner: `PREPARE` converts an already-selected `LONG_TASK_HANDOFF_REQUIRED` result into the existing `ai-job` Issue format, using the same poller-safe renderer as Project Intake and prefixing one bounded `AGENT_CYCLE_JOB_V1` continuation comment. It returns Issue title/label/body only; it never calls GitHub, PowerShell, Task Scheduler, Claude, push, PR, or merge itself.
+
+After the existing `ai-job-poller` owns selection/execution, use the existing `local-ai-handoff/work-state-report.mjs` as lifecycle evidence. `agent-job-bridge.mjs RESUME` accepts that current work-state evidence plus the Issue body and exact current focus, then maps only canonical stages: `QUEUED/IMPLEMENTING -> WAIT`, `REVIEW -> WAIT_HUMAN`, technical `FAILED/CONFLICT -> STOP`, human-gated `FAILED -> WAIT_HUMAN`, and `DONE -> ADVANCE_READY` (or `COMPLETED` when no next step was declared). Stale goal/next-step metadata fails closed. `ADVANCE_READY` is permission to call the existing Working Memory update path; the bridge does not create another state store.
+
+```text
+<agent-cycle LONG_TASK result> | agent-job-bridge PREPARE
+existing approved GitHub Issue-create route -> ai-job
+existing ai-job-poller -> implementation / tests / Draft PR
+existing work-state-report -> lifecycle evidence
+agent-job-bridge RESUME -> WAIT | WAIT_HUMAN | STOP | ADVANCE_READY | COMPLETED
+```
+
+Self-test:
+
+```text
+node .agents/skills/preflight-audit/agent-job-bridge-selftest.mjs
+```
+
+This trial deliberately does not add a daemon, scheduler, second state database, autonomous task invention, GitHub push/PR/merge authority, new provider route, or Scheduled Task / Windows execution-policy mutation. Candidate invention/event triggering remains a later decision only if the existing Issue queue, poller, and observers prove insufficient in real operation.
 
 ### Legacy implementation audit (rescue-only, fail-closed)
 

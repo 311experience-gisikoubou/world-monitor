@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 export const AGENTS_MAX_BYTES = 16 * 1024;
 export const INDEX_TEMPLATE = 'templates/AGENTS.index.md.template';
 export const ANTIGRAVITY_TEMPLATE = 'templates/.agents/rules/ai-foundation.md.template';
+export const ANTIGRAVITY_TARGET = '.agents/rules/ai-foundation.md';
 export const CLAUDE_TEMPLATE = 'templates/.claude/CLAUDE.md.template';
 export const GEMINI_TEMPLATE = 'templates/GEMINI.md.template';
 
@@ -62,7 +63,7 @@ export async function verifyEntrypointSources(rootRaw) {
   const root = resolve(rootRaw);
   const required = [
     'CORE.md', INDEX_TEMPLATE, CLAUDE_TEMPLATE, GEMINI_TEMPLATE,
-    'AGENTS.md', ANTIGRAVITY_TEMPLATE,
+    'AGENTS.md', ANTIGRAVITY_TEMPLATE, ANTIGRAVITY_TARGET,
   ];
   const missing = [];
   for (const rel of required) if (!(await isFile(resolve(root, rel)))) missing.push(rel);
@@ -71,11 +72,13 @@ export async function verifyEntrypointSources(rootRaw) {
   const exp = await expected(root);
   const actualAgents = normalize(await readFile(resolve(root, 'AGENTS.md'), 'utf8'));
   const actualAntigravity = normalize(await readFile(resolve(root, ANTIGRAVITY_TEMPLATE), 'utf8'));
+  const actualAntigravityTarget = normalize(await readFile(resolve(root, ANTIGRAVITY_TARGET), 'utf8'));
   const claude = normalize(await readFile(resolve(root, CLAUDE_TEMPLATE), 'utf8'));
   const gemini = normalize(await readFile(resolve(root, GEMINI_TEMPLATE), 'utf8'));
   const errors = [];
   if (actualAgents !== normalize(exp.agents)) errors.push('AGENTS_GENERATED_DRIFT');
   if (actualAntigravity !== normalize(exp.antigravity)) errors.push('ANTIGRAVITY_GENERATED_DRIFT');
+  if (actualAntigravityTarget !== normalize(exp.antigravity)) errors.push('ANTIGRAVITY_TARGET_GENERATED_DRIFT');
   const agentsBytes = Buffer.byteLength(actualAgents, 'utf8');
   if (agentsBytes > AGENTS_MAX_BYTES) errors.push('AGENTS_SIZE_LIMIT_EXCEEDED');
   if (!claude.includes('@../AGENTS.md') || !claude.includes('@../AGENTS.local.md')) errors.push('CLAUDE_ENTRY_IMPORT_MISSING');
@@ -94,6 +97,7 @@ export async function writeEntrypoints(rootRaw) {
   const targets = [
     [resolve(root, 'AGENTS.md'), exp.agents],
     [resolve(root, ANTIGRAVITY_TEMPLATE), exp.antigravity],
+    [resolve(root, ANTIGRAVITY_TARGET), exp.antigravity],
   ];
   for (const [path, content] of targets) {
     await mkdir(dirname(path), { recursive: true });

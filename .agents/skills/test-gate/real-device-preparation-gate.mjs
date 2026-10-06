@@ -1,5 +1,8 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import process from 'node:process';
+import { verifyHumanVisualReviewReceipt } from './human-visual-review-gate.mjs';
 
 const args = process.argv.slice(2);
 function argValue(name, fallback = '') {
@@ -18,6 +21,8 @@ const approvedTestEnvironment = argValue('--approved-test-environment').toLowerC
 const humanSampleDataEntry = argValue('--human-sample-data-entry').toLowerCase();
 const uiPathVerified = argValue('--ui-path-verified').toLowerCase();
 const manualStarted = argValue('--manual-started', 'no').toLowerCase();
+const stateId = argValue('--state-id');
+const humanVisualReviewReceiptFile = argValue('--human-visual-review-receipt-file');
 const jsonOnly = args.includes('--json');
 
 const findings = [];
@@ -69,6 +74,28 @@ if (manualRequired) {
   add('STOP', 'VERIFICATION_NOT_REQUIRED_CONFLICT', { verificationBasis, verificationOwner });
 }
 
+let humanVisualReviewReady = 'not-required';
+let humanVisualReviewReceiptId = null;
+if (manualRequired && verificationBasis === 'subjective' && verificationOwner === 'user') {
+  humanVisualReviewReady = 'unverified';
+  if (!stateId || !humanVisualReviewReceiptFile) {
+    add('STOP', 'HUMAN_VISUAL_REVIEW_RECEIPT_REQUIRED');
+  } else {
+    try {
+      const receipt = JSON.parse(readFileSync(resolve(humanVisualReviewReceiptFile), 'utf8'));
+      const verified = verifyHumanVisualReviewReceipt(receipt, stateId);
+      if (!verified.ok) {
+        add('STOP', 'HUMAN_VISUAL_REVIEW_RECEIPT_INVALID', { reason: verified.code });
+      } else {
+        humanVisualReviewReady = 'yes';
+        humanVisualReviewReceiptId = verified.receiptId;
+      }
+    } catch (error) {
+      add('STOP', 'HUMAN_VISUAL_REVIEW_RECEIPT_INVALID', { reason: error?.code || error?.message || 'READ_FAILED' });
+    }
+  }
+}
+
 if (sampleRequired) {
   if (sampleDataPrepared !== 'yes') add('STOP', 'SAMPLE_DATA_NOT_PREPARED');
   if (sampleDataPreparer === 'user') add('STOP', 'HUMAN_ASSIGNED_SAMPLE_DATA_CREATION');
@@ -91,6 +118,8 @@ const preparationIncomplete = findings.some((f) => [
   'HUMAN_SAMPLE_DATA_ENTRY_FORBIDDEN',
   'TEST_ENVIRONMENT_NOT_CONFIRMED',
   'UI_PATH_NOT_VERIFIED',
+  'HUMAN_VISUAL_REVIEW_RECEIPT_REQUIRED',
+  'HUMAN_VISUAL_REVIEW_RECEIPT_INVALID',
 ].includes(f.code));
 
 if (manualRequired && manualStarted === 'yes' && preparationIncomplete) {
@@ -110,6 +139,8 @@ if (!findings.some((f) => f.status === 'STOP')) {
     humanSampleDataEntry,
     uiPathVerified,
     manualStarted,
+    humanVisualReviewReady,
+    humanVisualReviewReceiptId,
   });
 }
 
@@ -127,6 +158,10 @@ const output = {
   humanSampleDataEntry: humanSampleDataEntry || '(missing)',
   uiPathVerified: uiPathVerified || '(missing)',
   manualStarted: manualStarted || '(missing)',
+  stateId: stateId || '(missing)',
+  humanVisualReviewReceiptFile: humanVisualReviewReceiptFile || '(missing)',
+  humanVisualReviewReady,
+  humanVisualReviewReceiptId,
   findings,
 };
 

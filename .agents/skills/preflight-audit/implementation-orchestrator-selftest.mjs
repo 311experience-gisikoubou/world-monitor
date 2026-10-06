@@ -30,6 +30,7 @@ function git(cwd, args) {
 const nodeHash = sha256File(process.execPath);
 const trustedClaudeHash = '647E736F20C9FF0553C754624CBF8A6DCAC196E8595509D8F63DCE8BBE818757';
 const inventoryUrl = pathToFileURL(path.join(orchestratorDir, 'ai-provider-inventory.mjs')).href;
+const researchGateUrl = pathToFileURL(path.join(orchestratorDir, 'research-gate.mjs')).href;
 
 let subscriptionSource = fs.readFileSync(path.join(orchestratorDir, 'claude-subscription-runner.mjs'), 'utf8');
 if (!subscriptionSource.includes(trustedClaudeHash)) throw new Error('trusted Claude hash missing from subscription runner');
@@ -43,19 +44,23 @@ fs.writeFileSync(patchedSubscriptionPath, subscriptionSource, 'utf8');
 let runnerSource = fs.readFileSync(path.join(orchestratorDir, 'implementation-runner.mjs'), 'utf8');
 runnerSource = runnerSource
   .replace("from './ai-provider-inventory.mjs';", `from '${inventoryUrl}';`)
-  .replace("from './claude-subscription-runner.mjs';", `from '${pathToFileURL(patchedSubscriptionPath).href}';`);
+  .replace("from './claude-subscription-runner.mjs';", `from '${pathToFileURL(patchedSubscriptionPath).href}';`)
+  .replace("from './research-gate.mjs';", `from '${researchGateUrl}';`);
 const patchedRunnerPath = path.join(tempRoot, 'implementation-runner.mjs');
 fs.writeFileSync(patchedRunnerPath, runnerSource, 'utf8');
 const patchedRunnerUrl = pathToFileURL(patchedRunnerPath).href;
 
 const ai_task_router_url = pathToFileURL(path.join(orchestratorDir, 'ai-task-router.mjs')).href;
 const receipt_url = pathToFileURL(path.join(orchestratorDir, 'implementation-route-receipt.mjs')).href;
+const clarity_url = pathToFileURL(path.join(orchestratorDir, 'instruction-clarity-gate.mjs')).href;
 
 let orchestratorSource = fs.readFileSync(orchestratorPath, 'utf8');
 orchestratorSource = orchestratorSource
   .replace("from './ai-provider-inventory.mjs';", `from '${inventoryUrl}';`)
   .replace("from './ai-task-router.mjs';", `from '${ai_task_router_url}';`)
   .replace("from './implementation-route-receipt.mjs';", `from '${receipt_url}';`)
+  .replace("from './instruction-clarity-gate.mjs';", `from '${clarity_url}';`)
+  .replace("from './research-gate.mjs';", `from '${researchGateUrl}';`)
   .replace("from './implementation-runner.mjs';", `from '${patchedRunnerUrl}';`);
 const patchedOrchestratorPath = path.join(tempRoot, 'implementation-orchestrator-under-test.mjs');
 fs.writeFileSync(patchedOrchestratorPath, orchestratorSource, 'utf8');
@@ -63,6 +68,51 @@ fs.writeFileSync(patchedOrchestratorPath, orchestratorSource, 'utf8');
 const { runImplementationOrchestration, validateOrchestrationTask } = await import(pathToFileURL(patchedOrchestratorPath).href);
 const { evaluateReceipt, verifyFinalReceipt } = await import(receipt_url);
 const { readHeadSha, computeChangeSetSha256 } = await import(patchedRunnerUrl);
+const { computeConstraintsDigest } = await import(researchGateUrl);
+
+function minimalPassChecklist() {
+  return ['safety', 'dataPreservation', 'existingOverlap'].map((id) => ({
+    id, status: 'PASS', applicable: true,
+    justification: `${id} looks fine for this bounded fixture edit.`,
+    primarySourceRef: 'https://example.invalid/evidence',
+  }));
+}
+// A minimal, honest BYPASS_LIGHT-shaped research envelope. The orchestrator
+// (before any provider probe), the raw runner (before invoking Claude), and
+// the route receipt (pre AND final) all independently re-evaluate this raw
+// evidence from scratch; none of them trust a caller-asserted result.
+function researchFor(taskId, overrides = {}) {
+  const repository = overrides.repository || { owner: 'acme', name: 'widgets' };
+  const scope = overrides.scope || ['src/**'];
+  const constraints = overrides.constraints || [];
+  const checklist = overrides.checklist || minimalPassChecklist();
+  return {
+    evidence: {
+      schemaVersion: 1,
+      evidenceBinding: {
+        taskId, proposalId: 'proposal-1', repository, scope, constraints,
+        constraintsDigestSha256: computeConstraintsDigest(constraints),
+        assessedAtUtcMs: Date.now(),
+        maxEvidenceAgeMs: 24 * 60 * 60 * 1000,
+      },
+      triggers: {
+        newCloudApiServiceAppLibraryCliAccount: false,
+        authNetworkPrivacySecurityEncryptionBackupStorageChange: false,
+        protectedMedicalData: false,
+        feeOrFreeQuota: false,
+        osBrowserCompatibility: false,
+        largeTransfer: false,
+        irreversibleOperation: false,
+        ongoingMaintenance: false,
+      },
+      noTriggerAssessment: { reasonCode: 'LOCAL_SAFE_EDIT_NO_RISK_SIGNAL', justification: 'Bounded local source edit fixture for orchestrator selftest.' },
+      checklist,
+      humanTopConditions: [],
+      deepResearch: null,
+    },
+    context: { proposalId: 'proposal-1', constraints, humanTopConditions: [] },
+  };
+}
 
 try {
   // --- real temp git repo, feature branch, GitHub-shaped origin (no network call is made or needed) ---
@@ -130,10 +180,100 @@ process.stdin.on('end', () => {
     allowedScope: ['src/**'],
     dataClass: 'source-only',
     repository: { owner: 'acme', name: 'widgets' },
+    instructionClarity: {
+      schemaVersion: 1,
+      taskId: 'orch-1',
+      instructions: [{ id: 'human-1', kind: 'INSTRUCTION', summary: 'Update the bounded widget implementation.' }],
+      unlistedAssumptionsPresent: false,
+      ambiguities: [],
+    },
+    research: researchFor('orch-1'),
   };
+  const payloadWithTaskId = (taskId, extra = {}) => ({
+    ...basePayload,
+    ...extra,
+    taskId,
+    instructionClarity: {
+      ...basePayload.instructionClarity,
+      ...(extra.instructionClarity || {}),
+      taskId,
+    },
+    research: extra.research || researchFor(taskId, {
+      repository: extra.repository || basePayload.repository,
+      scope: extra.allowedScope || basePayload.allowedScope,
+    }),
+  });
   assert(validateOrchestrationTask(basePayload).length === 0, 'valid orchestration payload rejected');
   assert(validateOrchestrationTask({ ...basePayload, forbiddenScope: ['src/protected-reference.ts'] }).length === 0, 'valid forbiddenScope must be accepted');
   assert(validateOrchestrationTask({ ...basePayload, forbiddenScope: ['src/*.ts'] }).includes('forbiddenScope_invalid'), 'unsupported forbiddenScope wildcard must fail closed');
+
+  // --- clarity negatives: material ambiguity / hidden assumption stop before Claude invocation ---
+  const materialStop = runImplementationOrchestration({
+    ...basePayload,
+    taskId: 'orch-material',
+    instructionClarity: {
+      ...basePayload.instructionClarity,
+      taskId: 'orch-material',
+      ambiguities: [{
+        id: 'visual-choice',
+        summary: 'Two interpretations visibly change the requested result.',
+        category: 'user-visible-design-behavior',
+        materiality: 'MATERIAL',
+        classificationReason: 'The choice changes user-visible behavior and requires human intent.',
+        decisionOwner: 'HUMAN',
+        resolution: 'UNRESOLVED',
+      }],
+    },
+  }, { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
+  assert(materialStop.result === 'STOP' && materialStop.code === 'INSTRUCTION_CLARITY_NOT_CONFIRMED',
+    `material ambiguity must STOP: ${JSON.stringify(materialStop)}`);
+
+  const hiddenStop = runImplementationOrchestration({
+    ...basePayload,
+    taskId: 'orch-hidden',
+    instructionClarity: {
+      ...basePayload.instructionClarity,
+      taskId: 'orch-hidden',
+      unlistedAssumptionsPresent: true,
+    },
+  }, { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
+  assert(hiddenStop.result === 'STOP' && hiddenStop.code === 'INSTRUCTION_CLARITY_NOT_CONFIRMED',
+    `hidden assumption must STOP: ${JSON.stringify(hiddenStop)}`);
+  assert(!fs.existsSync(logPath), 'clarity STOPs must happen before the Claude probe/runner is invoked');
+
+  // --- Research Gate: a raw checklist FAIL must block BEFORE any provider probe/invocation ---
+  const researchFailStop = runImplementationOrchestration(
+    payloadWithTaskId('orch-research-fail', {
+      research: researchFor('orch-research-fail', { checklist: [
+        { id: 'safety', status: 'FAIL', applicable: true, justification: 'A real safety concern exists.', primarySourceRef: 'https://example.invalid/evidence' },
+        { id: 'dataPreservation', status: 'PASS', applicable: true, justification: 'Fine.', primarySourceRef: 'https://example.invalid/evidence' },
+        { id: 'existingOverlap', status: 'PASS', applicable: true, justification: 'Fine.', primarySourceRef: 'https://example.invalid/evidence' },
+      ] }),
+    }),
+    { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 },
+  );
+  assert(researchFailStop.result === 'STOP' && researchFailStop.code === 'RESEARCH_GATE_BLOCKED',
+    `a raw research-gate FAIL must STOP before the Claude probe is ever invoked: ${JSON.stringify(researchFailStop)}`);
+  assert(!fs.existsSync(logPath), 'a research-gate block must never invoke the Claude probe/runner');
+
+  // Omitting the research envelope entirely must fail schema-closed, never silently bypass the orchestrator.
+  const { research: _omittedResearch, ...payloadWithoutResearch } = payloadWithTaskId('orch-research-missing');
+  const researchMissingStop = runImplementationOrchestration(payloadWithoutResearch, { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
+  assert(researchMissingStop.result === 'STOP' && researchMissingStop.code === 'TASK_SCHEMA_INVALID',
+    `an omitted research envelope must fail schema-closed: ${JSON.stringify(researchMissingStop)}`);
+  assert(!fs.existsSync(logPath), 'a schema-invalid task must never invoke the Claude probe/runner');
+
+  // A caller cannot assert its own 'ADOPT' on the raw evidence: the schema has no such field, so it is rejected
+  // by the independent re-evaluation and blocks rather than silently passing through (direct/bare-result bypass).
+  const bareResultEvidence = researchFor('orch-research-bare-result');
+  const researchBareResultStop = runImplementationOrchestration(
+    payloadWithTaskId('orch-research-bare-result', {
+      research: { evidence: { ...bareResultEvidence.evidence, result: 'ADOPT' }, context: bareResultEvidence.context },
+    }),
+    { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 },
+  );
+  assert(researchBareResultStop.result === 'STOP' && researchBareResultStop.code === 'RESEARCH_GATE_BLOCKED',
+    `a smuggled bare 'result' field on raw evidence must never be trusted: ${JSON.stringify(researchBareResultStop)}`);
 
   // --- golden path: route selection -> runner -> real edit (modified + new file) -> proof ---
   const routed = runImplementationOrchestration(basePayload, { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
@@ -166,6 +306,8 @@ process.stdin.on('end', () => {
     dataClass: basePayload.dataClass,
     costPolicy: 'no-new-cost',
     requestedAuthorities: [],
+    instructionClarity: basePayload.instructionClarity,
+    research: basePayload.research,
     implementationHead,
     executionEvidence: routed.executionEvidence,
   };
@@ -175,6 +317,18 @@ process.stdin.on('end', () => {
     owner: 'acme', name: 'widgets', branch: 'feat/widget', head: implementationHead, repoRoot: repoDir,
   });
   assert(verified.result === 'MERGE_READY', `expected MERGE_READY: ${JSON.stringify(verified)}`);
+
+  // --- negative: a raw research-gate FAIL at the FINAL receipt stage must block MERGE_READY, never trust say-so ---
+  const finalResearchFail = evaluateReceipt({
+    ...finalReceiptInput,
+    research: researchFor(basePayload.taskId, { checklist: [
+      { id: 'safety', status: 'FAIL', applicable: true, justification: 'A real safety concern exists.', primarySourceRef: 'https://example.invalid/evidence' },
+      { id: 'dataPreservation', status: 'PASS', applicable: true, justification: 'Fine.', primarySourceRef: 'https://example.invalid/evidence' },
+      { id: 'existingOverlap', status: 'PASS', applicable: true, justification: 'Fine.', primarySourceRef: 'https://example.invalid/evidence' },
+    ] }),
+  });
+  assert(finalResearchFail.result === 'STOP' && finalResearchFail.code === 'RESEARCH_GATE_BLOCKED',
+    `a raw research-gate FAIL at the final receipt must block, never PASS: ${JSON.stringify(finalResearchFail)}`);
 
   // --- negative: tampered post-Claude commit/change set must not verify ---
   const tamperedVerified = verifyFinalReceipt(evaluateReceipt({
@@ -202,27 +356,27 @@ process.stdin.on('end', () => {
   assert(directNoException.result === 'STOP' && directNoException.code === 'DIRECT_EXECUTOR_EXCEPTION_REQUIRED', 'unexplained direct-browser executor must STOP');
 
   // --- negative: unavailable executor (Claude CLI missing) must STOP, never silently substitute another route ---
-  const unavailable = runImplementationOrchestration({ ...basePayload, taskId: 'orch-2' }, { desc: null, envSource: cleanEnv, timeoutMs: 5000 });
+  const unavailable = runImplementationOrchestration(payloadWithTaskId('orch-2'), { desc: null, envSource: cleanEnv, timeoutMs: 5000 });
   assert(unavailable.result === 'STOP', 'missing Claude CLI must STOP the orchestration');
   assert(unavailable.routing?.result === 'STOP' && unavailable.routing?.code === 'NO_EXECUTOR_AVAILABLE', `expected NO_EXECUTOR_AVAILABLE routing: ${JSON.stringify(unavailable)}`);
   assert(unavailable.runner === null, 'the runner must never be invoked when no route was authorized');
 
   // --- negative: wrong repository identity (origin mismatch) must STOP before Claude is invoked ---
   const wrongIdentity = runImplementationOrchestration(
-    { ...basePayload, taskId: 'orch-3', repository: { owner: 'someone-else', name: 'widgets' } },
+    payloadWithTaskId('orch-3', { repository: { owner: 'someone-else', name: 'widgets' } }),
     { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 },
   );
   assert(wrongIdentity.result === 'STOP' && wrongIdentity.code === 'REPOSITORY_IDENTITY_MISMATCH', `wrong repository identity must STOP: ${JSON.stringify(wrongIdentity)}`);
 
   // --- negative: pre-run dirty worktree must STOP before Claude is invoked ---
   fs.writeFileSync(path.join(repoDir, 'PRE_EXISTING_UNTRACKED.txt'), 'was already here\n', 'utf8');
-  const dirtyStop = runImplementationOrchestration({ ...basePayload, taskId: 'orch-4' }, { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
+  const dirtyStop = runImplementationOrchestration(payloadWithTaskId('orch-4'), { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
   assert(dirtyStop.result === 'STOP' && dirtyStop.code === 'WORKTREE_NOT_CLEAN', `dirty worktree must STOP: ${JSON.stringify(dirtyStop)}`);
   fs.rmSync(path.join(repoDir, 'PRE_EXISTING_UNTRACKED.txt'));
 
   // --- negative: protected path must STOP even when it is inside allowedScope ---
   const forbidden = runImplementationOrchestration(
-    { ...basePayload, taskId: 'orch-protected', forbiddenScope: ['src/widget.ts'] },
+    payloadWithTaskId('orch-protected', { forbiddenScope: ['src/widget.ts'] }),
     { desc: desc('forbidden'), envSource: cleanEnv, timeoutMs: 5000 },
   );
   assert(forbidden.result === 'STOP' && forbidden.runner?.code === 'FORBIDDEN_SCOPE_VIOLATION', `protected edit must STOP: ${JSON.stringify(forbidden)}`);
@@ -231,7 +385,7 @@ process.stdin.on('end', () => {
 
   // --- negative: out-of-scope edit must STOP after Claude returns, before success is reported ---
   const outOfScope = runImplementationOrchestration(
-    { ...basePayload, taskId: 'orch-5', allowedScope: ['src/widget.ts'] },
+    payloadWithTaskId('orch-5', { allowedScope: ['src/widget.ts'] }),
     { desc: desc('outofscope'), envSource: cleanEnv, timeoutMs: 5000 },
   );
   assert(outOfScope.result === 'STOP' && outOfScope.runner?.code === 'ALLOWED_SCOPE_VIOLATION', `out-of-scope edit must STOP: ${JSON.stringify(outOfScope)}`);

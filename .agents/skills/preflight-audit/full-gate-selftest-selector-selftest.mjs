@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 
+// This selftest is paired with full-gate-selftest-selector.mjs via COMMANDS
+// (which passes it explicitly as argv[2]). Health-contract/registration
+// callers that invoke this file standalone (no argv) must still work: in
+// that case it defaults to its own sibling selector file rather than
+// failing closed on a missing argument.
 const selectorArg = process.argv[2];
-if (!selectorArg) throw new Error('selector path required');
-const selectorPath = resolve(selectorArg);
+const selectorPath = selectorArg
+  ? resolve(selectorArg)
+  : resolve(dirname(fileURLToPath(import.meta.url)), 'full-gate-selftest-selector.mjs');
 const selector = await import(pathToFileURL(selectorPath).href);
 const classifier = await import(pathToFileURL(resolve(selectorPath, '..', 'fast-path-classifier.mjs')).href);
 const live = classifier.observeLiveProjectContext();
@@ -40,7 +47,7 @@ const operationCodeOnly = select([
 assert(operationCodeOnly.selection === 'IMPACT_SCOPED', 'operation code-only change should be impact scoped');
 assert(operationCodeOnly.commands.length === operationCodeOnly.selectedTests.length, 'commands must match selected test count');
 assert(operationCodeOnly.commands.every((item,i) => item.id === operationCodeOnly.selectedTests[i] && item.argv[0] === 'node'), 'commands must align with selected tests');
-for (const id of ['fast-path','security-preflight','full-gate-selector','operation-preflight']) {
+for (const id of ['fast-path','security-preflight','full-gate-selector','operation-preflight','environment-lifecycle','apps-script-fixture']) {
   assert(operationCodeOnly.selectedTests.includes(id), `missing operation/core test ${id}`);
 }
 for (const id of ['merge-authorization','merge-execution']) {
@@ -49,7 +56,7 @@ for (const id of ['merge-authorization','merge-execution']) {
 for (const id of ['claude-runner','foundation-update','stagnation','project-context','foundation-bootstrap']) {
   assert(!operationCodeOnly.selectedTests.includes(id), `unrelated slow test selected: ${id}`);
 }
-assert(operationCodeOnly.selectedTests.length === 4, `ordinary IMPACT_SCOPED CORE + one family should select exactly 4 tests, got ${operationCodeOnly.selectedTests.length}`);
+assert(operationCodeOnly.selectedTests.length === 6, `ordinary IMPACT_SCOPED CORE + the operation-preflight family (operation-preflight + environment-lifecycle + apps-script-fixture) should select exactly 6 tests, got ${operationCodeOnly.selectedTests.length}`);
 assert(operationCodeOnly.selectedTestCount === operationCodeOnly.selectedTests.length, 'selectedTestCount must match selectedTests length');
 assert(operationCodeOnly.reductionPercent > 0 && operationCodeOnly.reductionPercent <= 100, 'ordinary IMPACT_SCOPED reduction must be a positive percentage');
 
@@ -98,15 +105,21 @@ assert(mergeExecutor.selection === 'FULL_SUITE', 'merge executor is merge-author
 assert(mergeExecutor.selectedTests.includes('merge-executor'), 'merge executor selftest missing');
 assert(mergeExecutor.reasons.includes('HIGH_COUPLING_PATH_REQUIRES_FULL_SUITE'), 'merge executor high-coupling reason missing');
 const routing = select(['.agents/skills/preflight-audit/ai-task-router.mjs']);
-for (const id of ['ai-provider-inventory','ai-task-router','provider-qualification','provider-readiness']) {
+for (const id of ['ai-provider-inventory','ai-task-router','provider-qualification','provider-readiness','research-gate']) {
   assert(routing.selectedTests.includes(id), `routing group missing ${id}`);
 }
 const implementationRunner = select(['.agents/skills/preflight-audit/implementation-runner.mjs']);
 assert(implementationRunner.selection === 'IMPACT_SCOPED', 'implementation runner change should be impact scoped');
-for (const id of ['implementation-runner','implementation-route-receipt','implementation-orchestrator','ai-provider-inventory','ai-task-router','provider-qualification','provider-readiness']) {
+for (const id of ['implementation-runner','implementation-route-receipt','implementation-orchestrator','ai-provider-inventory','ai-task-router','provider-qualification','provider-readiness','research-gate']) {
   assert(implementationRunner.selectedTests.includes(id), `implementation routing group missing ${id}`);
 }
 assert(!implementationRunner.selectedTests.includes('foundation-update'), 'implementation routing selection should not include unrelated foundation-update');
+
+// research-gate.mjs is a shared dependency broad enough to require the full suite, like fast-path-classifier.
+const researchGateChange = select(['.agents/skills/preflight-audit/research-gate.mjs']);
+assert(researchGateChange.selection === 'FULL_SUITE', 'research-gate.mjs change is high coupling and must use full suite');
+assert(researchGateChange.selectedTests.includes('research-gate'), 'research-gate selftest missing from full suite');
+assert(researchGateChange.reasons.includes('HIGH_COUPLING_PATH_REQUIRES_FULL_SUITE'), 'research-gate high-coupling reason missing');
 const implementationReceipt = select(['.agents/skills/preflight-audit/implementation-route-receipt.mjs']);
 assert(implementationReceipt.selection === 'IMPACT_SCOPED', 'implementation route receipt change should be impact scoped');
 assert(implementationReceipt.selectedTests.includes('implementation-route-receipt'), 'implementation route receipt selftest missing');
@@ -115,6 +128,28 @@ assert(implementationOrchestrator.selection === 'IMPACT_SCOPED', 'implementation
 for (const id of ['implementation-runner','implementation-route-receipt','implementation-orchestrator']) {
   assert(implementationOrchestrator.selectedTests.includes(id), `implementation orchestrator selection missing ${id}`);
 }
+const agentCycleChange = select(['.agents/skills/preflight-audit/agent-cycle.mjs']);
+assert(agentCycleChange.selection === 'IMPACT_SCOPED', 'agent-cycle change should be impact scoped');
+for (const id of ['agent-cycle','agent-job-bridge','implementation-orchestrator','research-gate']) {
+  assert(agentCycleChange.selectedTests.includes(id), `agent-orchestration family missing ${id}`);
+}
+const agentJobBridgeChange = select(['.agents/skills/preflight-audit/agent-job-bridge.mjs']);
+assert(agentJobBridgeChange.selection === 'IMPACT_SCOPED', 'agent-job-bridge change should be impact scoped');
+assert(agentJobBridgeChange.selectedTests.includes('agent-job-bridge'), 'agent-job-bridge selftest missing');
+
+const appsScriptFixtureChange = select(['.agents/skills/preflight-audit/fixtures/apps-script-ipad-safari-redirect-fixture.mjs']);
+assert(appsScriptFixtureChange.selection === 'IMPACT_SCOPED', 'apps-script fixture change should be impact scoped');
+assert(appsScriptFixtureChange.selectedTests.includes('apps-script-fixture'), 'apps-script fixture selftest missing from its own family');
+
+const claudeJobLauncherSelftestChange = select(['.agents/skills/long-task-wait/claude-job-launcher-selftest.mjs']);
+assert(claudeJobLauncherSelftestChange.selection === 'IMPACT_SCOPED', 'claude-job-launcher selftest change should be impact scoped');
+assert(claudeJobLauncherSelftestChange.selectedTests.includes('claude-job-launcher'), 'claude-job-launcher selftest missing');
+const runClaudeJobChange = select(['.agents/skills/long-task-wait/claude-job/run-claude-job.ps1']);
+assert(runClaudeJobChange.selection === 'IMPACT_SCOPED', 'run-claude-job.ps1 change should be impact scoped, not unmapped');
+for (const id of ['long-task-wait','stagnation','claude-job-launcher']) {
+  assert(runClaudeJobChange.selectedTests.includes(id), `long-task-wait family missing ${id} for run-claude-job.ps1 change`);
+}
+
 const foundation = select(['.agents/skills/foundation-sync-audit/foundation-update.mjs']);
 for (const id of ['foundation-sync','foundation-bootstrap','foundation-update','foundation-remote-plan','foundation-batch-rollout']) {
   assert(foundation.selectedTests.includes(id), `foundation group missing ${id}`);
@@ -171,6 +206,19 @@ assert(
   `verification-scope family should only add verification-scope on top of CORE, got ${JSON.stringify(verificationScope.selectedTests)}`,
 );
 
+const humanVisualReview = select(['.agents/skills/test-gate/human-visual-review-gate.mjs']);
+assert(humanVisualReview.selection === 'IMPACT_SCOPED', 'human visual review gate change should be impact scoped');
+for (const id of ['real-device','human-visual-review']) {
+  assert(humanVisualReview.selectedTests.includes(id), `human visual review family missing ${id}`);
+}
+assert(humanVisualReview.reasons.includes('IMPACT_FAMILY_REAL_DEVICE'), 'human visual review should map to real-device impact family');
+
+const realDevicePrep = select(['.agents/skills/test-gate/real-device-preparation-gate.mjs']);
+assert(realDevicePrep.selection === 'IMPACT_SCOPED', 'real-device preparation change should be impact scoped');
+for (const id of ['real-device','human-visual-review']) {
+  assert(realDevicePrep.selectedTests.includes(id), `real-device family missing ${id}`);
+}
+
 const legacyAudit = select(['.agents/skills/preflight-audit/legacy-implementation-audit.mjs']);
 assert(legacyAudit.selection === 'IMPACT_SCOPED', 'legacy-implementation-audit change should be impact scoped');
 for (const id of ['legacy-implementation-audit','implementation-route-receipt']) {
@@ -199,7 +247,7 @@ const highCoupling = select(['.agents/skills/preflight-audit/fast-path-classifie
 assert(highCoupling.selection === 'FULL_SUITE', 'fast-path classifier change must use full suite');
 assert(highCoupling.selectedTests.length === highCoupling.commands.length && highCoupling.selectedTests.includes('work-start'), 'full suite must include the complete current selftest set');
 assert(highCoupling.reasons.includes('HIGH_COUPLING_PATH_REQUIRES_FULL_SUITE'), 'high coupling reason missing');
-for (const id of ['verification-scope','legacy-implementation-audit']) {
+for (const id of ['verification-scope','legacy-implementation-audit','research-gate','environment-lifecycle','agent-cycle','agent-job-bridge','apps-script-fixture','claude-job-launcher']) {
   assert(highCoupling.selectedTests.includes(id), `full suite must include newly registered test ${id}`);
 }
 assert(highCoupling.reductionPercent === 0, 'FULL_SUITE reductionPercent must be 0');

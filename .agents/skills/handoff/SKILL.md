@@ -187,3 +187,10 @@ After the inbound envelope validates, retrieve detailed current state from canon
 - Separate facts from recommendations.
 - A busy repository is not promoted from Related Repo to Project Root.
 - Copy the relevant repository-specific safety facts from `AGENTS.local.md` into the handoff itself, especially forbidden areas, data/security boundaries, Git rules, real-device requirements, and additional-cost conditions. Do not merely point to `AGENTS.local.md`, because the receiving session may not have repository access. `PROJECT_CONTEXT.json` is only the machine-readable source for project identity.
+## Design Approval Scope and Canonical Promotion
+
+When `canonicalContract.requiredValidation` includes `approval-scope-gate`, design approval evidence stays inside Human Decision Sync. `designApproval.scope` is closed to COMPONENT / SECTION / SCREEN / WHOLE_APP; lower scope never implies higher scope. Short acknowledgements such as `OK`, `採用`, `これで進めて`, or `大丈夫` cannot authorize WHOLE_SCREEN_APPROVAL or CANONICAL_PROMOTION_APPROVAL.
+
+When `canonical-promotion-gate` is enabled, CURRENT DESIGN authority uses existing Canonical Contract `visual.governance`: canonical scope, full WIP -> LOCKED_COMPONENTS -> FINAL_CANDIDATE -> HUMAN_APPROVED -> CANONICAL history, DESIGN_REFERENCE lineage, content/reference SHA-256, and approved Git head. Promotion requires exact SCREEN/WHOLE_APP whole-screen approval plus separate canonical-promotion approval. Stale approval, changed content, unknown lineage, skipped state, lower-scope escalation, or a later explicit human correction saying WIP/not final/not canonical fails closed.
+
+Normal WIP work, comparison, component locking, screenshot QA, and FINAL_CANDIDATE creation do not add human checkpoints. Whole-screen/app final approval and canonical promotion remain the only added human-value boundary. Repositories without these requiredValidation entries keep prior behavior during staged rollout.

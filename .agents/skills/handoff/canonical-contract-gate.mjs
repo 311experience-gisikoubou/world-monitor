@@ -6,6 +6,7 @@ import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { normalizeUiReferenceRegistry, referencesForArtifact, UI_REFERENCE_REGISTRY } from './ui-reference-registry.mjs';
+import { normalizeDesignGovernance, validateCanonicalPromotionGate } from './canonical-promotion-gate.mjs';
 
 const STATUSES = new Set(['CURRENT','SUPERSEDED','HISTORICAL','DRAFT']);
 const KINDS = new Set(['PROJECT','BUSINESS','DESIGN','SECURITY','WORKFLOW','GOVERNANCE']);
@@ -26,10 +27,11 @@ function stringList(v,{max=50,ids=false}={}){if(!Array.isArray(v)||v.length>max)
 function cleanSource(v){const s=cleanText(v,500);if(!s||s.startsWith('/')||s.startsWith('\\')||s.includes('\\')||s.split('/').includes('..')||/^[A-Za-z]:/u.test(s))return null;return s;}
 
 function normalizeVisual(value,artifactId){
-  if(!exactKeys(value,['designId','version','scope','baseline']))return null;
+  if(!exactKeys(value,['designId','version','scope','baseline','governance']))return null;
   const designId=cleanId(value.designId),version=cleanText(value.version,80),scope=stringList(value.scope,{max:50}),baseline=BASELINES.has(value.baseline)?value.baseline:null;
-  if(!designId||designId!==artifactId||!version||!scope?.length||!baseline)return null;
-  return {designId,version,scope:[...scope].sort(),baseline};
+  const governance=value.governance===undefined?null:normalizeDesignGovernance(value.governance);
+  if(!designId||designId!==artifactId||!version||!scope?.length||!baseline||(value.governance!==undefined&&!governance))return null;
+  return {designId,version,scope:[...scope].sort(),baseline,...(governance?{governance}:{})};
 }
 
 function normalizeArtifact(value){
@@ -153,8 +155,9 @@ export function verifyCanonicalSources(contextFile,manifest){
     if(r.error||r.status!==0||!String(r.stdout??'').includes('\t'+source+'\0'))return stop('CANONICAL_SOURCE_MISSING','A CURRENT canonical source is not present as a file in Git HEAD.',{artifactId:a.id,source});
   }
   const ui=verifyUiReferenceSources(root,n.value);if(ui.result==='STOP')return ui;
+  const promotion=validateCanonicalPromotionGate(manifest,{repoRoot:root});if(promotion.result==='STOP')return promotion;
   const sourceState=canonicalSourceFingerprint(contextFile,manifest);if(sourceState.result==='STOP')return sourceState;
-  return pass({repository:n.value.repository,contractId:n.value.contractId,contractVersion:n.value.contractVersion,contractFingerprint:sourceState.contractFingerprint,canonicalSourceFingerprint:sourceState.canonicalSourceFingerprint,canonicalSourceCount:sourceState.canonicalSourceCount,uiReferenceConfigured:ui.uiReferenceConfigured===true,uiReferenceCount:ui.uiReferenceCount??0});
+  return pass({repository:n.value.repository,contractId:n.value.contractId,contractVersion:n.value.contractVersion,contractFingerprint:sourceState.contractFingerprint,canonicalSourceFingerprint:sourceState.canonicalSourceFingerprint,canonicalSourceCount:sourceState.canonicalSourceCount,uiReferenceConfigured:ui.uiReferenceConfigured===true,uiReferenceCount:ui.uiReferenceCount??0,canonicalPromotionConfigured:promotion.configured===true,canonicalPromotionCheckedArtifacts:promotion.checkedArtifacts??[]});
 }
 
 export function verifyCanonicalCheckpoint(contextFile,manifest,{checkpoint='PRE_IMPLEMENTATION',expectedSourceFingerprint=null}={}){
@@ -186,7 +189,7 @@ async function main(){
     if(sources.result==='STOP'){console.log(JSON.stringify(sources,null,pretty?2:0));process.exitCode=2;return;}
     const state=stateJson?JSON.parse(stateJson):stateFile?JSON.parse(readFileSync(resolve(stateFile),'utf8')):null;
     const result=validateCanonicalContract(manifest,state);
-    const output=result.result==='PROCEED'?{...result,canonicalSourceFingerprint:sources.canonicalSourceFingerprint,canonicalSourceCount:sources.canonicalSourceCount??0,checkpoint:sources.checkpoint??null,canonicalUnchanged:sources.canonicalUnchanged??null,baselineRecorded:sources.baselineRecorded??null,uiReferenceConfigured:sources.uiReferenceConfigured===true,uiReferenceCount:sources.uiReferenceCount??0}:result;
+    const output=result.result==='PROCEED'?{...result,canonicalSourceFingerprint:sources.canonicalSourceFingerprint,canonicalSourceCount:sources.canonicalSourceCount??0,checkpoint:sources.checkpoint??null,canonicalUnchanged:sources.canonicalUnchanged??null,baselineRecorded:sources.baselineRecorded??null,uiReferenceConfigured:sources.uiReferenceConfigured===true,uiReferenceCount:sources.uiReferenceCount??0,canonicalPromotionConfigured:sources.canonicalPromotionConfigured===true,canonicalPromotionCheckedArtifacts:sources.canonicalPromotionCheckedArtifacts??[]}:result;
     console.log(JSON.stringify(output,null,pretty?2:0));if(result.result==='STOP')process.exitCode=2;
   }catch(e){console.log(JSON.stringify(stop('CANONICAL_CONTRACT_GATE_ERROR',e?.message||'unknown error'),null,2));process.exitCode=2;}
 }

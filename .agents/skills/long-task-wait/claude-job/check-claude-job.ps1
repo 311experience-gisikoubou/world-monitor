@@ -67,7 +67,7 @@ elseif ($active -and $alive -and $elapsed -gt $LongMinutes) { $view = 'LONG_RUNN
 
 # Read-only no-observable-progress candidate signal. See NO_PROGRESS_WARNING limitation
 # note above: this is never an automatic kill trigger and this script never stops anything.
-$progressFiles = @('status.json','orchestrator.json','stderr.log','test.log','result.json','task.json') |
+$progressFiles = @('status.json','instruction-clarity.json','orchestrator.json','stderr.log','test.log','result.json','task.json') |
     ForEach-Object { Join-Path $jobDir $_ } | Where-Object { Test-Path $_ }
 $lastActivityUtc = $null
 foreach ($f in $progressFiles) {

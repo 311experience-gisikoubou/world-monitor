@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { verifyStagedEvidence as verifyUiReproductionEvidence } from './ui-reference-reproduction-gate.mjs';
+import { verifyCleanupReceipt } from './ui-browser-lifecycle.mjs';
 
 const MAX_INPUT_BYTES = 64 * 1024;
 const PHASES = new Set(['EARLY_CHECK', 'MILESTONE_CHECK', 'FINAL_REALITY_CHECK']);
@@ -14,7 +15,7 @@ const EVIDENCE_STATUSES = new Set(['PASS', 'FAIL', 'UNAVAILABLE']);
 const EVIDENCE_KINDS = new Set([
   'GIT_STATE', 'DIFF', 'SCREENSHOT', 'DOM', 'RUNTIME', 'TARGETED_TEST',
   'TEST_GATE_RESULT', 'API_RESPONSE', 'DB_SCHEMA', 'DB_STATE', 'CLI_OUTPUT',
-  'GENERATED_ARTIFACT', 'HASH', 'DOCUMENT_CONSISTENCY', 'UI_MEASUREMENT', 'PROTECTED_FILES_CHECK',
+  'GENERATED_ARTIFACT', 'HASH', 'DOCUMENT_CONSISTENCY', 'UI_MEASUREMENT', 'PROTECTED_FILES_CHECK', 'UI_BROWSER_CLEANUP',
 ]);
 const STATE_ID_RE = /^(?:git|remote):[0-9a-f]{40}$|^(?:worktree|artifact):[0-9a-f]{64}$/;
 
@@ -60,6 +61,9 @@ function evidenceRequirements(taskTypes, phase) {
   for (const taskType of taskTypes) {
     for (const group of TASK_REQUIREMENTS[taskType] ?? []) groups.push(group);
   }
+  if (phase === 'FINAL_REALITY_CHECK' && taskTypes.some(taskType => ['UI', 'UI_REFERENCE_REPRODUCTION'].includes(taskType))) {
+    groups.push(['UI_BROWSER_CLEANUP']);
+  }
   if (taskTypes.includes('FOUNDATION_GOVERNANCE')) {
     groups.push(['DOCUMENT_CONSISTENCY']);
     if (phase !== 'EARLY_CHECK') groups.push(['TARGETED_TEST']);
@@ -77,8 +81,45 @@ function normalizeEvidence(evidence) {
     reference: item.reference,
     stateId: item.stateId,
     ...(['UI_MEASUREMENT', 'PROTECTED_FILES_CHECK'].includes(item.kind) && item.receipt?.receiptId ? { uiReproductionReceiptId: item.receipt.receiptId } : {}),
+    ...(item.kind === 'UI_BROWSER_CLEANUP' && item.receipt?.runId ? { uiBrowserRunId: item.receipt.runId } : {}),
   }));
 }
+export function verifyStagedRealityReceipt(receipt, expectedStateId = '', options = {}) {
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) {
+    return { ok: false, code: 'STAGED_REALITY_RECEIPT_INVALID' };
+  }
+  if (receipt.schemaVersion !== 2 || receipt.receiptType !== 'STAGED_REALITY_RECEIPT_V2' ||
+      receipt.result !== 'PASS' || !PHASES.has(receipt.phase) || !STATE_ID_RE.test(receipt.stateId || '') ||
+      !Array.isArray(receipt.taskTypes) || receipt.taskTypes.length === 0) {
+    return { ok: false, code: 'STAGED_REALITY_RECEIPT_INVALID' };
+  }
+  const core = {
+    schemaVersion: receipt.schemaVersion,
+    receiptType: receipt.receiptType,
+    result: receipt.result,
+    code: receipt.code,
+    phase: receipt.phase,
+    stateId: receipt.stateId,
+    taskTypes: receipt.taskTypes,
+    authority: receipt.authority,
+    actors: receipt.actors,
+    identity: receipt.identity,
+    checkpoint: receipt.checkpoint,
+    evidence: receipt.evidence,
+    requiredEvidence: receipt.requiredEvidence,
+  };
+  const expectedReceiptId = createHash('sha256').update(JSON.stringify(core)).digest('hex');
+  if (receipt.receiptId !== expectedReceiptId) return { ok: false, code: 'STAGED_REALITY_RECEIPT_TAMPERED' };
+  if (expectedStateId && receipt.stateId !== expectedStateId) return { ok: false, code: 'STAGED_REALITY_RECEIPT_STALE' };
+  if (options.requireFinal === true && receipt.phase !== 'FINAL_REALITY_CHECK') {
+    return { ok: false, code: 'STAGED_REALITY_FINAL_REQUIRED' };
+  }
+  if (options.requireUi === true && !receipt.taskTypes.some(taskType => ['UI', 'UI_REFERENCE_REPRODUCTION'].includes(taskType))) {
+    return { ok: false, code: 'STAGED_REALITY_UI_REQUIRED' };
+  }
+  return { ok: true, code: 'STAGED_REALITY_RECEIPT_VALID', receiptId: receipt.receiptId };
+}
+
 export function evaluate(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return stop('INPUT_INVALID');
   if (input.schemaVersion !== 2) return stop(input.schemaVersion === 1 ? 'SCHEMA_VERSION_UPGRADE_REQUIRED' : 'SCHEMA_VERSION_INVALID');
@@ -131,6 +172,10 @@ export function evaluate(input) {
     if (['UI_MEASUREMENT', 'PROTECTED_FILES_CHECK'].includes(item.kind) && item.status === 'PASS') {
       const uiReceipt = verifyUiReproductionEvidence(item.receipt, input.stateId);
       if (!uiReceipt.ok) return stop('UI_REPRODUCTION_EVIDENCE_INVALID', { reason: uiReceipt.code, reference: item.reference });
+    }
+    if (item.kind === 'UI_BROWSER_CLEANUP' && item.status === 'PASS') {
+      const cleanup = verifyCleanupReceipt(item.receipt, input.stateId);
+      if (!cleanup.ok) return stop('UI_BROWSER_CLEANUP_FAILED', { reason: cleanup.reason, reference: item.reference });
     }
   }
 

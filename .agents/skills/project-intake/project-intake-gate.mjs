@@ -5,6 +5,8 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { validateOrchestrationTask } from '../preflight-audit/implementation-orchestrator.mjs';
 import { normalizeHumanDecisionSync, validateHumanDecisionSync } from '../handoff/human-decision-sync.mjs';
+import { validateResearchEnvelopeShape } from '../preflight-audit/research-gate.mjs';
+import { validateInstructionClarityInput } from '../preflight-audit/instruction-clarity-gate.mjs';
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,159}$/;
 const STATUSES = new Set(['DRAFT', 'PENDING_HUMAN', 'APPROVED', 'REJECTED']);
@@ -207,6 +209,23 @@ const DEFAULT_DONE_CONDITION = 'Source edits are limited to allowedScope.';
 const DEFAULT_PROHIBITION = '変更許可パス外を変更しない';
 const POLLER_ROOT_ONLY_BLOCKED = new Set(['**', '.git/**', '.ai-jobs/**']);
 
+// The poller-format Issue body only carries objective/scope/done-conditions/
+// test-command/prohibitions: it has no field for the already-validated
+// research/instructionClarity evidence an orchestrator task payload already
+// carries. This is the SINGLE place that evidence is embedded as a second
+// machine-readable comment (the same mechanism agent-job-bridge.mjs already
+// uses for continuation metadata), so that EVERY caller of
+// renderPollerIssueFromTask/renderAiJobIssue -- not only the agent-cycle ->
+// agent-job-bridge path -- carries the raw evidence forward. It embeds the
+// EXACT evidence already present on the validated task (never a fabricated/
+// placeholder trigger:false or ADOPT result).
+const RESEARCH_META_TAG = 'AGENT_CYCLE_JOB_RESEARCH_V1';
+export function encodeResearchEnvelope(taskPayload) {
+  const payload = { research: taskPayload.research, instructionClarity: taskPayload.instructionClarity };
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  return `<!-- ${RESEARCH_META_TAG} ${encoded} -->`;
+}
+
 // A single Markdown-safe line: no control chars, not blank, not a poller heading, no HTML comment.
 function jobLine(value) {
   if (typeof value !== 'string') return null;
@@ -237,14 +256,26 @@ function jobLines(list, mapper) {
 }
 function bullets(items) { return items.map((item) => '- ' + item); }
 
-// Render the existing poller-compatible AI Job Issue body from an APPROVED intake
-// and an orchestrator task payload. Does not add any new task/job schema.
-export function renderAiJobIssue(briefInput, manifest, taskPayload) {
-  const packet = buildImplementationTaskPacket(briefInput, manifest);
-  if (packet.result === 'STOP') return packet;
+// Render the existing poller-compatible AI Job Issue body from an already
+// bounded orchestrator task payload. This is deliberately lower-level than
+// Project Intake approval so existing approved control loops can reuse the
+// exact same safe poller format without duplicating the renderer.
+export function renderPollerIssueFromTask(taskPayload) {
   const errors = validateOrchestrationTask(taskPayload);
   if (errors.length > 0) return stop('PROJECT_INTAKE_JOB_TASK_INVALID', 'Orchestrator task payload is invalid.', { errors });
-  if (taskPayload.objective !== packet.objective) return stop('PROJECT_INTAKE_JOB_OBJECTIVE_MISMATCH', 'Orchestrator task objective must equal the intake objective.');
+  // validateOrchestrationTask only checks research's shape and that
+  // instructionClarity.taskId matches; the full instructionClarity shape
+  // (and research's full shape, re-asserted here for a direct caller that
+  // skipped the orchestrator) must also hold before this evidence is
+  // embedded for a downstream launcher to trust.
+  const researchShapeErrors = validateResearchEnvelopeShape(taskPayload.research);
+  if (researchShapeErrors.length > 0) {
+    return stop('PROJECT_INTAKE_JOB_RESEARCH_EVIDENCE_INVALID', 'research evidence failed full shape validation.', { errors: researchShapeErrors });
+  }
+  const clarityShapeErrors = validateInstructionClarityInput(taskPayload.instructionClarity);
+  if (clarityShapeErrors.length > 0) {
+    return stop('PROJECT_INTAKE_JOB_INSTRUCTION_CLARITY_INVALID', 'instructionClarity failed full shape validation.', { errors: clarityShapeErrors });
+  }
   const objective = jobLine(taskPayload.objective);
   if (!objective) return stop('PROJECT_INTAKE_JOB_TEXT_UNSAFE', 'Objective cannot be rendered as a single safe line.');
   const rawPromptLines = String(taskPayload.prompt).split(/\r?\n/u);
@@ -259,7 +290,7 @@ export function renderAiJobIssue(briefInput, manifest, taskPayload) {
   const allowed = jobLines(taskPayload.allowedScope, jobPath);
   if (!allowed) return stop('PROJECT_INTAKE_JOB_ALLOWED_SCOPE_INVALID', 'allowedScope cannot be rendered in poller path notation.');
   const noDone = taskPayload.doneConditions === undefined || (Array.isArray(taskPayload.doneConditions) && taskPayload.doneConditions.length === 0);
-  const done = noDone ?[DEFAULT_DONE_CONDITION] : jobLines(taskPayload.doneConditions, jobLine);
+  const done = noDone ? [DEFAULT_DONE_CONDITION] : jobLines(taskPayload.doneConditions, jobLine);
   if (!done) return stop('PROJECT_INTAKE_JOB_DONE_CONDITIONS_REQUIRED', 'doneConditions must be non-empty renderable lines when provided.');
   const tests = taskPayload.requiredTests;
   if (!Array.isArray(tests) || tests.length !== 1) return stop('PROJECT_INTAKE_JOB_TEST_COMMAND_INVALID', 'requiredTests must contain exactly one command.');
@@ -270,13 +301,29 @@ export function renderAiJobIssue(briefInput, manifest, taskPayload) {
   if (!forbidden) return stop('PROJECT_INTAKE_JOB_FORBIDDEN_SCOPE_REQUIRED', 'forbiddenScope entries must be renderable as paths.');
   const promptText = promptLines.join('\n').trim();
   const lines = [
+    encodeResearchEnvelope(taskPayload), '',
     '## ' + AI_JOB_SECTIONS.objective, objective, ...(promptText ? ['', promptText] : []), '',
     '## ' + AI_JOB_SECTIONS.allowedPaths, ...bullets(allowed), '',
     '## ' + AI_JOB_SECTIONS.doneConditions, ...bullets(done), '',
     '## ' + AI_JOB_SECTIONS.testCommand, testCommand, '',
     '## ' + AI_JOB_SECTIONS.prohibitions, ...bullets(forbidden), '',
   ];
-  return { result: 'PROCEED', code: 'PROJECT_INTAKE_AI_JOB_ISSUE', intakeId: packet.intakeId, markdown: lines.join('\n') };
+  return { result: 'PROCEED', code: 'POLLER_AI_JOB_ISSUE_RENDERED', markdown: lines.join('\n') };
+}
+
+// Render the existing poller-compatible AI Job Issue body from an APPROVED intake
+// and an orchestrator task payload. Does not add any new task/job schema.
+export function renderAiJobIssue(briefInput, manifest, taskPayload) {
+  const packet = buildImplementationTaskPacket(briefInput, manifest);
+  if (packet.result === 'STOP') return packet;
+  const rendered = renderPollerIssueFromTask(taskPayload);
+  if (rendered.result === 'STOP') return rendered;
+  if (taskPayload.objective !== packet.objective) return stop('PROJECT_INTAKE_JOB_OBJECTIVE_MISMATCH', 'Orchestrator task objective must equal the intake objective.');
+  return {
+    ...rendered,
+    code: 'PROJECT_INTAKE_AI_JOB_ISSUE',
+    intakeId: packet.intakeId,
+  };
 }
 
 function parseArgs(argv) {

@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { normalizeCanonicalContract } from './canonical-contract-gate.mjs';
+import { normalizeDesignApproval, validateApprovalScopeGate } from './approval-scope-gate.mjs';
 
 const STATUSES=new Set(['PROPOSED','CONFIRMED','DEPRECATED','UNRESOLVED']);
 const SOURCES=new Set(['EXPLICIT_HUMAN','AI_PROPOSAL']);
@@ -22,7 +23,7 @@ export function requiresHumanDecisionSync(manifest){
   return Array.isArray(manifest?.canonicalContract?.requiredValidation)&&manifest.canonicalContract.requiredValidation.includes('human-decision-sync');
 }
 function normalizeDecision(value){
-  const allowed=['id','topic','status','summary','decidedAt','source','type','replaces','artifactIds'];
+  const allowed=['id','topic','status','summary','decidedAt','source','type','replaces','artifactIds','designApproval'];
   if(!exactKeys(value,allowed))return null;
   const id=cleanId(value.id),topic=cleanId(value.topic),status=STATUSES.has(value.status)?value.status:null;
   const summary=resolvedText(value.summary,2000),decidedAt=cleanText(value.decidedAt,40);
@@ -31,7 +32,10 @@ function normalizeDecision(value){
   if(!id||!topic||!status||!summary||!decidedAt||!source||!type||!artifactIds)return null;
   if(!/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/u.test(decidedAt))return null;
   if(status!=='PROPOSED'&&source!=='EXPLICIT_HUMAN')return null;
-  return {id,topic,status,summary,decidedAt,source,type,replaces,artifactIds:[...artifactIds].sort()};
+  const designApproval=value.designApproval===undefined?null:normalizeDesignApproval(value.designApproval);
+  if(value.designApproval!==undefined&&!designApproval)return null;
+  if(designApproval&&(type!=='DESIGN'||source!=='EXPLICIT_HUMAN'))return null;
+  return {id,topic,status,summary,decidedAt,source,type,replaces,artifactIds:[...artifactIds].sort(),...(designApproval?{designApproval}:{})};
 }
 export function normalizeHumanDecisionSync(manifest){
   const required=requiresHumanDecisionSync(manifest);
@@ -78,6 +82,8 @@ export function validateHumanDecisionSync(manifest,stateInput=null){
   const normalized=normalizeHumanDecisionSync(manifest);
   if(normalized.error)return normalized.error;
   if(!normalized.value)return pass({configured:false,required:false,humanDecisionFingerprint:null,activeDecisions:[],deprecatedDecisions:[],unresolvedItems:[],proposedDecisions:[],currentState:null,nextAction:null});
+  const approvalScope=validateApprovalScopeGate(manifest);
+  if(approvalScope.result==='STOP')return approvalScope;
   const {value,byId}=normalized;
   const detail={
     configured:true,required:normalized.required,humanDecisionFingerprint:humanDecisionFingerprint(value),

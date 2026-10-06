@@ -15,13 +15,17 @@ import {
   unsafeProviderEnvPresent,
   run,
 } from './claude-subscription-runner.mjs';
+import {
+  evaluateResearchGateBound, blocksSourceWrite,
+  validateResearchEnvelopeShape, buildResearchExpectedBinding,
+} from './research-gate.mjs';
 
 const SCHEMA_VERSION = 1;
 const ROUTE_ID = 'claude-implementation-write';
 export const ALLOWED_CAPABILITIES = new Set(['implementation', 'bugfix', 'refactor', 'testing']);
 export const ALLOWED_DATA_CLASSES = new Set(['source-only', 'synthetic', 'public']);
 const SHA_RE = /^[0-9a-f]{40}$/i;
-const ALLOWED_KEYS = new Set(['schemaVersion', 'taskId', 'capability', 'dataClass', 'prompt', 'repoRoot', 'branch', 'allowedScope', 'forbiddenScope', 'repository']);
+const ALLOWED_KEYS = new Set(['schemaVersion', 'taskId', 'capability', 'dataClass', 'prompt', 'repoRoot', 'branch', 'allowedScope', 'forbiddenScope', 'repository', 'research']);
 const MAX_INPUT_BYTES = 64 * 1024;
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const DEFAULT_TIMEOUT_MS = 180000;
@@ -113,6 +117,13 @@ export function validateImplementationTask(payload) {
     errors.push('forbiddenScope_invalid');
   }
   if (!validRepository(payload.repository)) errors.push('repository_invalid');
+  // This is the actual exported source writer: it must never be bypassable
+  // by calling it directly instead of going through
+  // implementation-orchestrator.mjs. Every invocation independently carries
+  // and (in runClaudeImplementationTask below) re-evaluates its own raw
+  // research envelope, bound to this exact task/repository/allowedScope,
+  // BEFORE Claude is ever probed or invoked.
+  errors.push(...validateResearchEnvelopeShape(payload.research));
   return errors;
 }
 
@@ -388,6 +399,20 @@ export function runClaudeImplementationTask(payload, {
   const taskId = safeToken(payload?.taskId) ? payload.taskId : null;
   const errors = validateImplementationTask(payload);
   if (errors.length > 0) return stop('TASK_SCHEMA_INVALID', taskId);
+
+  // The raw research envelope is independently re-evaluated here, BEFORE any
+  // provider probe/invocation (isolateTrustedClaudeBinary/subscriptionAuth/
+  // run below all actually spawn the Claude CLI). This is the direct
+  // exported source writer itself, so this check can never be bypassed by
+  // skipping implementation-orchestrator.mjs; expected taskId/repository/
+  // scope are built from this task's own payload fields, never from the
+  // evidence, and a caller-asserted result is never trusted.
+  const researchExpected = buildResearchExpectedBinding(payload.research, {
+    taskId, repository: payload.repository, scope: payload.allowedScope,
+  });
+  const researchGate = evaluateResearchGateBound(payload.research.evidence, researchExpected);
+  if (blocksSourceWrite(researchGate)) return { ...stop('RESEARCH_GATE_BLOCKED', taskId), researchGate };
+
   if (!desc) return stop('CLAUDE_CLI_UNAVAILABLE', taskId);
   if (unsafeProviderEnvPresent(envSource)) return stop('UNSAFE_PROVIDER_ENV_PRESENT', taskId);
 
@@ -468,6 +493,7 @@ export function runClaudeImplementationTask(payload, {
       repoRoot: repoCheck.resolvedRoot,
       branch: repoCheck.branch,
       output: parsed.result,
+      researchGate: { result: researchGate.result, code: researchGate.code, taskId: researchGate.taskId },
       evidence: implementationRunnerEvidence({ auth, credentialEnvAbsent: true, runnerSupported: true, repoVerified: true }),
       executionEvidence: { preHead, changeSetSha256: changeSet.changeSetSha256, changedPaths: changeSet.changedPaths },
       forbiddenScope: [...(payload.forbiddenScope ?? [])],

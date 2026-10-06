@@ -91,6 +91,18 @@ try {
     $retryCheckpointError = $null
     Update-Status @{ attempt = 0; auto_retries_used = 0; max_auto_retries = $maxAutoRetries; retry_stop_code = $null }
 
+    $clarityPath = Join-Path $JobDir 'instruction-clarity.json'
+    if (-not (Test-Path $clarityPath -PathType Leaf)) { throw 'instruction-clarity.json is missing from job evidence.' }
+    try { $instructionClarity = Get-Content $clarityPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { throw 'instruction-clarity.json is not valid JSON.' }
+
+    # Research Gate envelope: already rebound (taskId only) and preflight-checked
+    # by run-claude-job.ps1. implementation-orchestrator.mjs below independently
+    # re-evaluates the raw evidence on every attempt -- this runner never trusts
+    # any prior result and never strips/alters the envelope.
+    $researchPath = Join-Path $JobDir 'research.json'
+    if (-not (Test-Path $researchPath -PathType Leaf)) { throw 'research.json is missing from job evidence.' }
+    try { $research = Get-Content $researchPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { throw 'research.json is not valid JSON.' }
+
     while ($true) {
         $attempt++
         $gates = [ordered]@{}
@@ -111,6 +123,8 @@ try {
             doneConditions = @('Implement only the requested task within allowedScope.')
             requiredTests = @(); dataClass = 'source-only'
             repository = @{ owner = [string]$st.repository_owner; name = [string]$st.repository_name }
+            instructionClarity = $instructionClarity
+            research = $research
         }
         $taskPath = Join-Path $JobDir 'task.json'
         Save-Json $task $taskPath
@@ -170,7 +184,7 @@ try {
         # Per-attempt audit evidence stays inside the job-local directory.
         $attemptDir = Join-Path (Join-Path $JobDir 'attempts') ('attempt-{0}' -f $attempt)
         New-Item -ItemType Directory -Force -Path $attemptDir | Out-Null
-        foreach ($f in @('task.json', 'orchestrator.json', 'test.log', 'stderr.log')) {
+        foreach ($f in @('task.json', 'instruction-clarity.json', 'orchestrator.json', 'test.log', 'stderr.log')) {
             $src = Join-Path $JobDir $f
             if (Test-Path $src) { Copy-Item $src (Join-Path $attemptDir $f) -Force }
         }

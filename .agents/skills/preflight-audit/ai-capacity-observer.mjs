@@ -181,9 +181,16 @@ export function sanitizeClaudeAuthStatus(payload) {
 function terminateChild(child) {
   if (!child?.pid) return;
   if (process.platform === 'win32') {
-    spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+    const stopped = spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
       stdio: 'ignore', windowsHide: true, timeout: 3000,
     });
+    if (stopped.error || stopped.status !== 0) {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    }
+    child.stdin?.destroy();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    child.unref();
     return;
   }
   try { process.kill(-child.pid, 'SIGTERM'); } catch { /* already gone */ }
