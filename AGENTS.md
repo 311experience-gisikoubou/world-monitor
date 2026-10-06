@@ -17,6 +17,7 @@
 - 技術的な事実確認・安全判定・設定値・診断・実装方法・承認済み方針内の構成選択はAI側で解決する。**技術的に重要・大規模であることだけを理由に人間確認へ昇格させない。** 技術的根拠だけでは一意に決められず、人間の目的・業務方針・継続費用・責任分担・データ取扱い方針・日常の使い方などに実質的な選択が残る場合だけ、人間の価値判断として扱う。AIは先に技術調査・安全比較・推奨案を作り、非エンジニアにも判断できる言葉で実際の違いを説明してから判断を仰ぐ。
 - 一度人間が価値・方針を決めた後、その承認範囲内の安全な技術詳細はAIが自動で継続し、細かな技術事項ごとに確認を取り直さない。
 - **人間が基準・正本・承認済みデザイン・承認済み仕様として確定した内容は、AIが改善目的を含め独断で変更しない。** 配置・構成・順序・サイズ・名称・情報階層・業務フロー・設計方針・データ構造等の意味ある差分は新たな人間判断として扱い、明示承認なしに既存基準へ混入させない。AIは改善案を別案として提示できるが、承認済み基準を置換してはならない。
+- **人間の自然言語・口頭指示は、そのタスクの権威として扱う。** 複数の解釈が承認済みscope/正本、利用者に見える結果、業務上の意味・流れ、安全・privacy・data取扱い、継続費用、破壊的操作、その他の人間の価値判断を実質的に変え得る場合、AIは推測で補完せず、未解決点を特定してsource実装前に停止し、必要最小限だけ確認する。一方、承認済み意図を変えない安全・可逆な技術詳細はAIが解決し、非エンジニアへ技術判断を返さない。AIが置く非重要な仮定も隠さず、機械可読な作業証拠へ明示する。
 - 自動化そのものを目的にしない。目的は、人間が創造・発想・価値判断に集中できる状態である。
 - 安全な作業は自動で進める。機密データへのアクセス・外部送信・破壊的または不可逆な操作は停止条件として扱い、技術的安全性の判定を人間へ丸投げしない。
 - 重要ルールを決めた時点で、AIはそのルールが「宣言だけで足りる」「運用へ組み込む必要がある」「技術的強制が必要」のどれかを判定する。security・privacy・実データ・外部送信に関するルールは、原則として運用以上を必須とし、必要な強制が未実装なら「強制済み」「安全確認済み」と表現しない。
@@ -77,7 +78,9 @@ Tier 0 安全原則は上の CORE セクションを常時適用し、詳細ル�
 
 - Project Intake（新規project・意味ある新機能の入口）: 実装前に`project-intake`で目的・scope・assumption・未解決の人間判断をbrief化する。未解決質問0件かつ対応するHuman Decision Syncが`CONFIRMED / EXPLICIT_HUMAN`になった後だけ既存開発workflowへ進む。
 - 変更前に `preflight-audit` を通し、正本・project identity・安全境界・作業所有権を確認する。local source writeの開始時は `work-start-guard.mjs --mode write` で、clean worktree・live default branch・branch base・AGENTS/Foundation currentnessを機械確認する。読み取り専用監査は `--mode read-only` でdirty状態を破壊せず観測できる。
+- 新しいcloud/API/service/app/library/CLI/accountの採用、auth/network/privacy/security変更、保護データ、fee/free quota、OS/browser互換性、大容量転送、不可逆操作、継続保守のいずれかに該当する変更では、source writer・install・account・config変更の前に`preflight-audit`のResearch Gate（`research-gate.mjs`）を通す。checklist semanticsの正本は`preflight-audit/SKILL.md`であり、ここでは複製しない。
 - `STAGED_REALITY_GATE_REQUIRED=YES`。実装は EARLY / MILESTONE / FINAL REALITY の該当checkを飛ばさない。`UI_REFERENCE_REPRODUCTION`ではstate-bound `UI_MEASUREMENT`と`PROTECTED_FILES_CHECK`を必須とし、同じcheck IDが3回連続で実測FAILならSTOPする。
+- `HUMAN_VISUAL_REVIEW_READY_REQUIRED=YES`。人間へUIの見た目確認を依頼する前に、exact stateのFINAL staged-reality receiptと、実際に提示する同一application windowのsurface/provenance/non-production/foreground/clipping/overflow/required-region証拠を`human-visual-review-gate.mjs`へ渡し、`HUMAN_VISUAL_REVIEW_READY_V1`を得る。repositoryがTauri等の実アプリsurfaceを要求する場合、通常browser/Vite/file:// prototype/CDP/画像viewerは人間確認surfaceの代替にしない。receiptなしで「確認画面を開いた」「確認してください」と報告しない。
 - For approved-reference UI reproduction, canonicalization and implementation are separate phases. Before source changes, reproduction schema v3 must have a protected `COMPLETE` `REFERENCE_IMAGE_MEASURED` canonicalization record with zero unresolved ambiguities and explicit coverage for layout geometry, spacing, typography, colors, and fixed shapes. Protect it together with the reference/version, numeric dimensions/tolerances, inspection script, fixed capture conditions (viewport/zoom/DPR/font/app-window), synthetic fixture, overlay proof, FINAL visual thresholds, fixed-shape registry, and canonical shape assets. EARLY/MILESTONE are numeric-centered; FINAL requires numeric PASS + direct approved-reference-vs-actual screenshot PASS + all fixed-shape region comparisons PASS. Overlay/annotated-reference images cannot substitute for an actual screenshot.
 - 長時間・複数段階作業の終了前は `stagnation-watch.mjs --response-intent terminate` の terminal state に従う。
 - 共通ルール変更は `common-rule-integration-audit` を先に実行し、既存へ統合できる場合は新しいルールを増やさない。

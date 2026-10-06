@@ -10,6 +10,7 @@
 - ローカルGit操作
 - テスト実行
 - commit / push / PR準備
+- qualified source実装・refactor・reviewの適性参照: write経路のqualification状況は`PROJECT_CONTEXT.json`の`research-gate-and-ai-routing-v1`決定と`ai-task-router.mjs`を正本とする（詳細チェックリストはここで再掲しない）。qualification後はClaudeと対等な候補として適性・費用・残量・権限・データ区分・品質で評価される。
 
 ## 制約
 

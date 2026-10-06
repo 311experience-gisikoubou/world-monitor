@@ -49,6 +49,28 @@ Reality evidence is task-aware rather than UI-centric:
 
 `FINAL_REALITY_CHECK` additionally requires the already-completed `test-gate` result as `TEST_GATE_RESULT` evidence. This reuses proof; it does not rerun the same test merely because the workflow moved forward.
 
+### Scope boundary vs Research Gate / provider routing / cleanup
+
+`test-gate` and `staged-reality-gate.mjs` validate executable, machine-observed evidence (diffs, selftests, runtime output) against the exact audited state. They do not themselves decide whether an AI actually performed real-world research, select/invoke an AI provider, or authorize an install/account/cleanup action. Those decisions belong to `preflight-audit`'s Research Gate (`research-gate.mjs`, canonical semantics in `preflight-audit/SKILL.md`), `ai-task-router.mjs`, and `environment-lifecycle-audit.mjs` respectively; `test-gate` only confirms that whatever evidence those gates produced is schema-valid and bound to the current state when a downstream receipt requires it. Do not describe this evidence-receiving check as an `ENFORCED` universal interception of a browser turn or of provider invocation; see the equivalent honesty note in `preflight-audit/SKILL.md` and `final-pr-audit/SKILL.md`.
+
+### Managed UI browser lifecycle
+
+`UI_BROWSER_CLEANUP_REQUIRED=YES`
+
+Any Foundation-managed UI verification that starts Chrome/CDP must use the shared lifecycle helper instead of an ad-hoc browser launch. The helper allocates a loopback CDP port, creates a per-run profile below the Foundation temporary root, records browser PID / launcher PID / port / profile / start time / repository / run ID, and pairs use with `finally` cleanup. Playwright/CDP verification should connect to that managed Chrome; an unmarked Playwright or normal browser process is intentionally outside cleanup authority.
+
+Use `launchManagedBrowser` / `withManagedBrowser` from `.agents/skills/test-gate/ui-browser-lifecycle.mjs`. The wrapper keeps verification outcome and cleanup outcome separate: a verification error is preserved and receives its cleanup receipt, while a successful verification with failed cleanup raises `UI_BROWSER_CLEANUP_FAILED`.
+
+Cleanup is PID/run-owned and refuses ownership mismatch or image-name-wide termination. After the run it proves the recorded root PID is gone, managed descendants are gone, the CDP port is released, and profile locks are gone before emitting `BROWSER_CLEANUP_OK`. Cleanup failure emits `BROWSER_CLEANUP_FAILED`; orphan scan events use `ORPHAN_BROWSER_FOUND` and `ORPHAN_BROWSER_REMOVED`.
+
+At FINAL REALITY, both `UI` and `UI_REFERENCE_REPRODUCTION` require a PASS `UI_BROWSER_CLEANUP_V1` receipt as `UI_BROWSER_CLEANUP` evidence bound to the same `stateId`. EARLY/MILESTONE do not require cleanup evidence.
+
+Self-test:
+
+```text
+node .agents/skills/test-gate/ui-browser-lifecycle-selftest.mjs
+```
+
 ### Approved Reference Reproduction Gate
 
 An approved-reference implementation is not an ordinary `UI` task. Classify it as `UI_REFERENCE_REPRODUCTION` so a design cannot be declared complete from implementation reasoning or screenshot impression alone.
@@ -151,6 +173,9 @@ Classification notes:
 - A repository-root `*.js|*.mjs|*.cjs` runtime file is treated as a frontend companion only when the same changed-file set already contains a strong frontend anchor such as root `index.html`, `app/`, `src/`, `web/`, `frontend/`, `ui/`, or a recognized frontend verification script. A root runtime JS file by itself remains `UNKNOWN`. Root filenames with clear server/backend/API/build/config/test/spec/tool/script/bundler/lint/e2e semantics remain `UNKNOWN` even beside a frontend anchor.
 - Not every `scripts/*.ts|.js|.mjs` file is treated as frontend. A `scripts/*` file is only classified as frontend when its filename clearly combines a frontend/UI/browser/render/layout/visual/home-stage/home-invoice purpose with verification/test/selftest/smoke/check/scale semantics (for example `scripts/home-stage-scale.selftest.ts` or `scripts/home-invoice-pending.selftest.ts`). Other `scripts/*` files fall through to `UNKNOWN` and require `STOP`.
 - Dependency, migration, governance/docs, and backend classification still take priority over this frontend-verification-script predicate.
+- Backend vocabulary includes a `gateway` directory segment, matching `gateway/**` at any depth (for example `gateway/viewer-core/index.ts`, `gateway/viewer-server/server.ts`, `gateway/receiver/handler.ts`) regardless of file extension, the same way `backend/`, `server/`, or `api/` already are.
+- A narrow, reusable predicate additionally recognizes a dedicated gateway test living directly under `scripts/*.js|.ts|.mjs` (not under a `gateway/` directory). The filename before its final extension is split into segments on `-`, `_`, and `.`; the file is backend only when that segment set contains the exact segment `gateway` **and** one of the exact segments `test`, `selftest`, or `spec` (for example `scripts/gateway-viewer-phase8.test.mjs`, `scripts/gateway-receiver-e2e.test.mjs`, or any future name following the same convention such as `scripts/gateway-sync-worker.selftest.ts`). This is segment-exact, not substring: `scripts/gatewayish-test.js` (segment `gatewayish`, not `gateway`) and `scripts/gateway-contest.js` (segment `contest`, not `test`) stay `UNKNOWN`. A `gateway` segment without a delimited test/selftest/spec segment, such as `scripts/gateway-tools.js`, also stays `UNKNOWN`, as does an unrelated file such as `scripts/unrelated.js` or anything under the singular `script/**` (the predicate only matches the plural `scripts/` prefix).
+- Dependency, migration, governance/docs classification still take priority over both the gateway directory segment and the dedicated gateway script-test predicate. Backend wins over the frontend-verification-script predicate whenever a file matches the dedicated gateway script-test predicate, so a gateway test naming a frontend-sounding concern (such as `viewer`) is still classified backend, not frontend.
 
 Decisions:
 
@@ -167,6 +192,23 @@ A heavy check that is unrelated to the classified change must not run merely for
 - `RELEASE_GATE`
 
 Do not invent a free-text escalation reason. Do not use an escalation code merely to preserve an old habit.
+
+The gate also returns `verificationLevel`:
+
+- `MINIMAL`: docs/metadata-style changes; only the direct consistency property plus diff hygiene.
+- `TARGETED`: one runtime stack or one governance subsystem; run only the directly mapped test(s).
+- `AFFECTED`: more than one runtime stack is changed; verify each affected stack, still without a repository-wide suite by default.
+- `FULL`: migration, dependency change, or explicit release gate. This is the exceptional path.
+
+For Rust, a lib unit test should be narrowed to its test binary before broader execution. Example:
+
+```text
+cargo test --lib <fully-qualified-test-name> -- --exact
+```
+
+Use `cargo test --test <target>` for a specific integration-test binary. Do not omit `--lib` for a lib-only unit test when omission would compile unrelated integration-test binaries. The same rule applies to other languages: select the narrowest package/module/component/test target supported by the repository before widening scope.
+
+For Cargo worktrees, do not assume cache sharing. Compare `cargo metadata --no-deps --format-version 1` `target_directory` values and measured targeted-test timing before standardizing a shared `CARGO_TARGET_DIR`. Prefer the simpler current layout unless measurement shows a repeatable benefit; a shared target that causes invalidation/relink churn is not an optimization.
 
 Self-test:
 
@@ -203,10 +245,10 @@ Use repository commands that actually exist. Do not invent commands.
 
 - Documentation-only changes: diff hygiene plus relevant document consistency. Build, application tests, dependency audit, and real-device checks are normally `unneeded`.
 - Governance-only changes such as `.agents/` or common rule documentation: diff hygiene plus the targeted selftest for the changed gate/rule and document consistency. Application-wide frontend/backend suites are normally `unneeded`.
-- Frontend-only changes: diff hygiene, relevant selftest, repository-listed frontend static checks as applicable, and frontend build. Full frontend suites, backend full suites, migration tests, and dependency audit require evidence that they are actually needed; the scope gate rejects unrelated broad checks by default.
-- Backend-only changes: diff hygiene plus repository-listed backend verification. A backend full suite may be required when the backend implementation changed; unrelated frontend verification remains `unneeded`.
-- Database/migration changes: also use `migration-safety`; verify frozen migrations remain unchanged, run backend coverage required by the repository, migration-specific tests, fresh-apply/upgrade/integrity coverage where defined.
-- Dependency changes: dependency/security audit is required. Add affected build/tests according to the changed dependency and repository policy; do not automatically run every repository suite.
+- Frontend-only changes: diff hygiene plus the narrowest directly mapped frontend test. Add static checks/build only when they prove a property touched by the diff or repository policy explicitly requires them. Browser launch, screenshots, and visual comparison are `unneeded` for backend-only changes and for frontend changes that do not affect rendered behavior.
+- Backend-only changes: diff hygiene plus the narrowest directly mapped backend test. A backend full suite is **not** the default; widen only after targeted failure/uncertainty or an accepted escalation condition. For Rust lib unit tests, prefer `cargo test --lib <name> -- --exact`.
+- Database/migration changes: also use `migration-safety`; this is a `FULL` verification class. Keep targeted backend evidence, migration-specific coverage, required backend full coverage, and the repository-wide final suite defined by policy.
+- Dependency changes: dependency/security audit is required and this is a `FULL` verification class because dependency effects can cross module boundaries. Run the repository-wide final suite once for the exact state; later stages should reuse its receipt rather than repeat it.
 - Mixed frontend/backend runtime changes: verify both affected stacks, but do not automatically add `FULL_REPOSITORY_SUITE` unless a valid escalation reason exists.
 - Unknown scope: fail closed. Classify the changed file or update the common gate only when the classification gap is real and reusable; do not guess.
 
@@ -301,6 +343,44 @@ Additional rules:
 - Verify actual UI labels and paths from source/UI evidence; do not ask the human to discover controls.
 - If sample data, environment proof, or UI path is missing, keep verification `unrun` or `interrupted` and return to preparation.
 - When `verificationOwner=user`, report the duration estimate and fixed human-check count before the first human action. AI-owned objective verification does not create a user-facing confirmation step.
+
+## Human Visual Review Readiness Gate
+
+`HUMAN_VISUAL_REVIEW_READY_REQUIRED=YES`
+
+Before asking a human to visually judge a UI (for example “画面を確認してください”, “見た目はこれでOKですか”, “この画面を採用しますか”), do **not** rely on a screenshot, normal browser/Vite window, file:// prototype, image viewer, or CDP page merely because it looks similar. First finish the objective UI verification for the exact state and issue a FINAL `STAGED_REALITY_RECEIPT_V2`. Then collect evidence from the **same application window that will actually be shown to the human** and run:
+
+```text
+node .agents/skills/test-gate/human-visual-review-gate.mjs < human-visual-review-input.json
+```
+
+A PASS returns `HUMAN_VISUAL_REVIEW_READY_V1`. Until that receipt exists for the exact current `stateId`, the AI must not tell the human that the review screen is ready and must not ask for visual approval.
+
+For a subjective user-owned real-device check, the existing `real-device-preparation-gate.mjs` also requires this receipt and exact state:
+
+```text
+node .agents/skills/test-gate/real-device-preparation-gate.mjs ... --verification-basis subjective --verification-owner user --state-id <stateId> --human-visual-review-receipt-file <receipt.json>
+```
+
+The input binds:
+- the exact FINAL staged-reality receipt and git/worktree state;
+- the repository-declared expected application surface (for example `tauri`) and the actually observed surface;
+- current project/worktree provenance and confirmed non-production data/environment;
+- the real application host process, visible/foreground window, and proof that the measured window is the same window presented to the human;
+- a fresh presentation timestamp (maximum age 30 minutes, with only 60 seconds future-clock skew allowed), so an old proof cannot survive later resize/relaunch;
+- actual viewport/DPR;
+- raw page/screen `clientWidth/clientHeight/scrollWidth/scrollHeight` metrics; the gate computes overflow rather than accepting a caller-supplied PASS boolean;
+- every required review region's raw bounding rect, visible width/height, and client/scroll metrics; the gate computes viewport containment, clipping, and overflow, while internal scrolling is allowed only when explicitly declared.
+
+Fail closed when the expected and observed application surfaces differ, the declared application runtime is bypassed, a Tauri review is hosted by a normal browser process, the window is hidden/background, measured and presented window IDs differ, provenance/non-production proof is missing, required regions are clipped/out of viewport, or unapproved page/screen overflow exists. Internal list/detail scrolling may be allowed only when that region explicitly declares `internalScrollAllowed: true`.
+
+This is a presentation-readiness gate, not the human design decision itself. The human still decides subjective appearance/operation only after the receipt is PASS.
+
+Self-test:
+
+```text
+node .agents/skills/test-gate/human-visual-review-gate-selftest.mjs
+```
 
 ## Default Order
 

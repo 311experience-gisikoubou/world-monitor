@@ -87,10 +87,11 @@ The helper uses Node built-ins only. Do not add a dependency, external network p
 For Claude implementation work that can outlive the outer Remote Desktop Commander/tool wait, use the PowerShell transport under `claude-job/` instead of increasing the outer wait or repeatedly polling the raw CLI.
 
 - `run-claude-job.ps1` creates an isolated job worktree/branch and stays as the tracked worker process; a process manager such as Remote Desktop Commander returns control after initial output and later observes that same PID.
+- A new job requires AI-prepared `-InstructionClarityFile <clarity.json>`. The launcher rebinds the evidence to the concrete job task ID, runs the existing `preflight-audit/instruction-clarity-gate.mjs`, and stores the validated file with job evidence. Continuations reuse that evidence unless the AI supplies an explicit replacement. Do not ask the human to create this file.
 - Model execution remains delegated to the existing `preflight-audit/implementation-orchestrator.mjs`; do not add a second raw-Claude route.
 - `check-claude-job.ps1` is read-only. `LONG_RUNNING` is a warning only; it never authorizes an automatic kill.
 - `check-claude-job.ps1` also reports `NO_PROGRESS_WARNING`, a read-only candidate signal derived only from the
-  newest last-write timestamp among a job's own existing evidence files (`status.json`, `orchestrator.json`,
+  newest last-write timestamp among a job's own existing evidence files (`status.json`, `instruction-clarity.json`, `orchestrator.json`,
   `stderr.log`, `test.log`, `result.json`, `task.json`), configurable via `-NoProgressMinutes` (default 90). It is
   honestly named: no file activity does not prove Claude is frozen, because the current qualified
   `implementation-orchestrator.mjs` buffers provider stdout/stderr until the call completes. It is a candidate
@@ -123,6 +124,10 @@ Run:
 
 ```text
 node .agents/skills/long-task-wait/bounded-task-wait-selftest.mjs
+node .agents/skills/long-task-wait/claude-job-runtime-selftest.mjs
+node .agents/skills/long-task-wait/claude-job-launcher-selftest.mjs
 ```
+
+`claude-job-runtime-selftest.mjs` exercises `check-claude-job.ps1` (`NO_PROGRESS_WARNING` stays warning-only) and `stop-claude-job.ps1` (fail-closed on wrong JobId/identity; exact synthetic process stop only on confirmed identity match). `claude-job-launcher-selftest.mjs` is an offline regression proving `run-claude-job.ps1` itself rejects FAIL/UNKNOWN/missing/mismatched-continuation-context Research Gate evidence before any branch/worktree/background-job/continuation-checkpoint mutation, using a temporary synthetic git repository and local fixture evidence only. Both are Windows PowerShell 5 only and no-op elsewhere.
 
 Use proportional verification. This helper does not justify application Rust/frontend full suites, repeated REAL_DEVICE runs, GitHub-hosted Actions, or unrelated refactoring by itself.

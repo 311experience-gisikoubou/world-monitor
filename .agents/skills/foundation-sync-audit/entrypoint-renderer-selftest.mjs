@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import {
   AGENTS_MAX_BYTES,
   ANTIGRAVITY_TEMPLATE,
+  ANTIGRAVITY_TARGET,
   CLAUDE_TEMPLATE,
   GEMINI_TEMPLATE,
   INDEX_TEMPLATE,
@@ -47,10 +48,19 @@ try {
   assert.equal(written.code, 'ENTRYPOINT_SOURCE_CURRENT');
   const firstAgents = await readFile(join(root, 'AGENTS.md'), 'utf8');
   const firstRule = await readFile(join(root, ANTIGRAVITY_TEMPLATE), 'utf8');
+  const firstTarget = await readFile(join(root, ANTIGRAVITY_TARGET), 'utf8');
+  assert.equal(firstTarget, firstRule);
   const second = await writeEntrypoints(root);
   assert.equal(second.ok, true);
   assert.equal(await readFile(join(root, 'AGENTS.md'), 'utf8'), firstAgents);
   assert.equal(await readFile(join(root, ANTIGRAVITY_TEMPLATE), 'utf8'), firstRule);
+  assert.equal(await readFile(join(root, ANTIGRAVITY_TARGET), 'utf8'), firstTarget);
+
+  await writeFile(join(root, ANTIGRAVITY_TARGET), firstTarget + '\ndrift\n', 'utf8');
+  const targetDrift = await verifyEntrypointSources(root);
+  assert.equal(targetDrift.ok, false);
+  assert.equal(targetDrift.errors.includes('ANTIGRAVITY_TARGET_GENERATED_DRIFT'), true);
+  await writeFile(join(root, ANTIGRAVITY_TARGET), firstTarget, 'utf8');
 
   await writeFile(join(root, 'AGENTS.md'), firstAgents + '\ndrift\n', 'utf8');
   const drift = await verifyEntrypointSources(root);

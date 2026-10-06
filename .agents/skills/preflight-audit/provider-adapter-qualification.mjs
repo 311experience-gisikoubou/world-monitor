@@ -8,8 +8,16 @@ const SCHEMA_VERSION = 1;
 const EXECUTION_ENVIRONMENT = 'prompt-cli';
 const SAFE_CAPABILITIES = new Set([
   'review', 'diagnosis', 'research', 'documentation', 'design',
-  'planning', 'audit',
+  'planning', 'audit', 'deep-research',
 ]);
+// 'deep-research' is a strictly stronger claim than ordinary 'research': it
+// asserts this adapter is actually qualified to serve as the Deep-Research-
+// equivalent independent/adversarial pass research-gate.mjs requires for
+// high-risk triggers. It must never be granted on capability-list presence
+// alone -- an adapter claiming it must separately carry closed, machine-
+// checkable evidence that it genuinely performs independent multi-source
+// verification, or qualification is refused for that capability.
+const DEEP_RESEARCH_CAPABILITY = 'deep-research';
 const AUTH_EVIDENCE = new Set(['VERIFIED', 'UNKNOWN', 'FAILED']);
 const TOOL_BOUNDARIES = new Set(['NO_LOCAL_TOOLS_ENFORCED', 'UNKNOWN', 'UNSAFE']);
 const DATA_BOUNDARIES = new Set(['EXPLICIT_SAFE_PAYLOAD_ONLY', 'UNKNOWN', 'UNSAFE']);
@@ -63,6 +71,19 @@ export function validateAdapter(adapter) {
   if (!DATA_BOUNDARIES.has(evidence.dataBoundary)) errors.push('dataBoundary_invalid');
   if (!COST_BOUNDARIES.has(evidence.incrementalCostBoundary)) errors.push('incrementalCostBoundary_invalid');
   if (!FALLBACK_BEHAVIORS.has(evidence.fallbackBehavior)) errors.push('fallbackBehavior_invalid');
+
+  const claimsDeepResearch = Array.isArray(adapter.capabilities) && adapter.capabilities.includes(DEEP_RESEARCH_CAPABILITY);
+  const deepEvidence = evidence.deepResearchEvidence;
+  if (claimsDeepResearch) {
+    if (!deepEvidence || typeof deepEvidence !== 'object' || Array.isArray(deepEvidence) ||
+        Object.keys(deepEvidence).some((key) => !['independentMultiSourceVerified', 'justification'].includes(key)) ||
+        typeof deepEvidence.independentMultiSourceVerified !== 'boolean' ||
+        typeof deepEvidence.justification !== 'string' || !deepEvidence.justification.trim() || deepEvidence.justification.length > 500) {
+      errors.push('deepResearchEvidence_required_for_deep_research_capability');
+    }
+  } else if (deepEvidence !== undefined) {
+    errors.push('deepResearchEvidence_forbidden_without_deep_research_capability');
+  }
   return errors;
 }
 
@@ -77,6 +98,10 @@ function qualificationReasons(adapter) {
   }
   if (adapter.evidence.fallbackBehavior !== 'STOP_BEFORE_COST_OR_PERMISSION_EXPANSION') {
     reasons.push('FALLBACK_NOT_FAIL_CLOSED');
+  }
+  if (Array.isArray(adapter.capabilities) && adapter.capabilities.includes(DEEP_RESEARCH_CAPABILITY) &&
+      adapter.evidence.deepResearchEvidence?.independentMultiSourceVerified !== true) {
+    reasons.push('DEEP_RESEARCH_NOT_ACTUALLY_QUALIFIED');
   }
   return reasons;
 }

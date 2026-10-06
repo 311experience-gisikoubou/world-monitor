@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { evaluate } from './staged-reality-gate.mjs';
+import { evaluate, verifyStagedRealityReceipt } from './staged-reality-gate.mjs';
 
 const S = 'worktree:' + 'a'.repeat(64);
 const G = 'git:' + 'b'.repeat(40);
@@ -45,6 +45,25 @@ function uiReceipt(stateId = G, phase = 'FINAL_REALITY_CHECK') {
 }
 const uiEv = (kind, stateId = G, receipt = uiReceipt(stateId)) => ({
   kind, status: 'PASS', source: 'local', reference: 'selftest:' + kind, stateId, receipt,
+});
+function cleanupReceipt(stateId = G) {
+  return {
+    schemaVersion: 1,
+    receiptType: 'UI_BROWSER_CLEANUP_V1',
+    result: 'PASS',
+    code: 'BROWSER_CLEANUP_OK',
+    runId: 'ui-run-1',
+    stateId,
+    ownershipValidated: true,
+    rootPidGone: true,
+    childProcessesGone: true,
+    cdpPortReleased: true,
+    profileLocksGone: true,
+  };
+}
+const cleanupEv = (stateId = G, receipt = cleanupReceipt(stateId)) => ({
+  kind: 'UI_BROWSER_CLEANUP', status: 'PASS', source: 'local',
+  reference: 'selftest:UI_BROWSER_CLEANUP', stateId, receipt,
 });
 
 function input(phase, taskTypes, evidence, checkpoint, stateId = S) {
@@ -226,7 +245,26 @@ result = evaluate(input(
   { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
   G,
 ));
+assert.equal(result.code, 'REQUIRED_EVIDENCE_MISSING');
+assert(result.missingEvidence.includes('UI_BROWSER_CLEANUP'));
+
+result = evaluate(input(
+  'FINAL_REALITY_CHECK', ['UI'],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), cleanupEv(G), finalEv('TEST_GATE_RESULT')],
+  { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
+  G,
+));
 assert.equal(result.result, 'PASS');
+assert(result.requiredEvidence.includes('UI_BROWSER_CLEANUP'));
+
+const failedCleanup = { ...cleanupReceipt(G), result: 'FAIL', code: 'BROWSER_CLEANUP_FAILED' };
+result = evaluate(input(
+  'FINAL_REALITY_CHECK', ['UI'],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), cleanupEv(G, failedCleanup), finalEv('TEST_GATE_RESULT')],
+  { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
+  G,
+));
+assert.equal(result.code, 'UI_BROWSER_CLEANUP_FAILED');
 
 result = evaluate(input(
   'EARLY_CHECK', ['UI_REFERENCE_REPRODUCTION'],
@@ -250,12 +288,16 @@ assert.equal(result.evidence.find(x => x.kind === 'UI_MEASUREMENT').uiReproducti
 const finalUiReceipt = uiReceipt(G, 'FINAL_REALITY_CHECK');
 result = evaluate(input(
   'FINAL_REALITY_CHECK', ['UI_REFERENCE_REPRODUCTION'],
-  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), uiEv('UI_MEASUREMENT', G, finalUiReceipt), uiEv('PROTECTED_FILES_CHECK', G, finalUiReceipt), finalEv('TEST_GATE_RESULT')],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), uiEv('UI_MEASUREMENT', G, finalUiReceipt), uiEv('PROTECTED_FILES_CHECK', G, finalUiReceipt), cleanupEv(G), finalEv('TEST_GATE_RESULT')],
   { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
   G,
 ));
 assert.equal(result.result, 'PASS');
 assert.equal(result.code, 'FINAL_REALITY_CHECK_PASS');
+assert.equal(verifyStagedRealityReceipt(result, G, { requireFinal: true, requireUi: true }).ok, true);
+assert.equal(verifyStagedRealityReceipt(result, 'git:' + 'c'.repeat(40), { requireFinal: true, requireUi: true }).code, 'STAGED_REALITY_RECEIPT_STALE');
+const tamperedRealityReceipt = { ...result, code: 'TAMPERED' };
+assert.equal(verifyStagedRealityReceipt(tamperedRealityReceipt, G, { requireFinal: true, requireUi: true }).code, 'STAGED_REALITY_RECEIPT_TAMPERED');
 
 const missingVisualCore = { ...uiReceipt(G, 'FINAL_REALITY_CHECK') };
 delete missingVisualCore.receiptId;
@@ -264,7 +306,7 @@ delete missingVisualCore.fixedShapeComparison;
 missingVisualCore.receiptId = createHash('sha256').update(JSON.stringify(missingVisualCore)).digest('hex');
 result = evaluate(input(
   'FINAL_REALITY_CHECK', ['UI_REFERENCE_REPRODUCTION'],
-  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), uiEv('UI_MEASUREMENT', G, missingVisualCore), uiEv('PROTECTED_FILES_CHECK', G, missingVisualCore), finalEv('TEST_GATE_RESULT')],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), uiEv('UI_MEASUREMENT', G, missingVisualCore), uiEv('PROTECTED_FILES_CHECK', G, missingVisualCore), cleanupEv(G), finalEv('TEST_GATE_RESULT')],
   { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
   G,
 ));
@@ -274,7 +316,7 @@ const tamperedUiReceipt = uiReceipt(G, 'FINAL_REALITY_CHECK');
 tamperedUiReceipt.protectedFilesUnchanged = false;
 result = evaluate(input(
   'FINAL_REALITY_CHECK', ['UI_REFERENCE_REPRODUCTION'],
-  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), uiEv('UI_MEASUREMENT', G, tamperedUiReceipt), uiEv('PROTECTED_FILES_CHECK', G, tamperedUiReceipt), finalEv('TEST_GATE_RESULT')],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), uiEv('UI_MEASUREMENT', G, tamperedUiReceipt), uiEv('PROTECTED_FILES_CHECK', G, tamperedUiReceipt), cleanupEv(G), finalEv('TEST_GATE_RESULT')],
   { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
   G,
 ));
@@ -282,7 +324,7 @@ assert.equal(result.code, 'UI_REPRODUCTION_EVIDENCE_INVALID');
 
 result = evaluate(input(
   'FINAL_REALITY_CHECK', ['UI_REFERENCE_REPRODUCTION'],
-  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), uiEv('UI_MEASUREMENT', 'worktree:' + 'c'.repeat(64), uiReceipt('worktree:' + 'c'.repeat(64))), uiEv('PROTECTED_FILES_CHECK', 'worktree:' + 'c'.repeat(64), uiReceipt('worktree:' + 'c'.repeat(64))), finalEv('TEST_GATE_RESULT')],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), uiEv('UI_MEASUREMENT', 'worktree:' + 'c'.repeat(64), uiReceipt('worktree:' + 'c'.repeat(64))), uiEv('PROTECTED_FILES_CHECK', 'worktree:' + 'c'.repeat(64), uiReceipt('worktree:' + 'c'.repeat(64))), cleanupEv(G), finalEv('TEST_GATE_RESULT')],
   { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
   G,
 ));

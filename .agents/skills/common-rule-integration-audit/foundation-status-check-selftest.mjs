@@ -66,6 +66,9 @@ try {
   for (const label of ['✅ 共通運用中', '🟡 運用ルールのみ', '🧪 試験中', '💡 アイデア', '⬜ 未着手']) {
     assert.equal(markdown.includes(label), true);
   }
+  for (const marker of ['## 全体運用サマリー', '最小確認 → 必要なら範囲拡大 → 最終確認', '完了 → 今ここ → 次 → その後', 'portfolio-governance-audit.mjs']) {
+    assert.equal(markdown.includes(marker), true);
+  }
 
   const idea = await buildStatusModel({
     root,

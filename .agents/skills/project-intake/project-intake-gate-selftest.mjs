@@ -9,8 +9,10 @@ import {
   normalizeIntakeBrief,
   renderIntakeBriefMarkdown,
   renderAiJobIssue,
+  renderPollerIssueFromTask,
 } from './project-intake-gate.mjs';
 import { validateOrchestrationTask } from '../preflight-audit/implementation-orchestrator.mjs';
+import { computeConstraintsDigest } from '../preflight-audit/research-gate.mjs';
 
 function risk(overrides = {}) {
   return {
@@ -161,6 +163,7 @@ assert(packet.downstreamGates.stagedReality.includes('staged-reality-gate'));
 assert(packet.downstreamGates.finalPrAudit.includes('final-pr-audit'));
 assert(packet.downstreamGates.humanDecisionSync.includes('human-decision-sync'));
 
+const TASK_FIXTURE_NOW = Date.now();
 function task(overrides = {}) {
   return {
     schemaVersion: 1,
@@ -176,6 +179,48 @@ function task(overrides = {}) {
     requiredTests: ['node src/helper-selftest.mjs'],
     dataClass: 'source-only',
     repository: { owner: 'example', name: 'demo' },
+    instructionClarity: {
+      schemaVersion: 1,
+      taskId: 'demo-task',
+      instructions: [{ id: 'intake-1', kind: 'INSTRUCTION', summary: 'Build the approved small local helper within the bounded scope.' }],
+      unlistedAssumptionsPresent: false,
+      ambiguities: [],
+    },
+    research: (() => {
+      const constraints = [];
+      return {
+        evidence: {
+          schemaVersion: 1,
+          evidenceBinding: {
+            taskId: 'demo-task', proposalId: 'proposal-1',
+            repository: { owner: 'example', name: 'demo' },
+            scope: ['src/helper.mjs', 'docs/**'], constraints,
+            constraintsDigestSha256: computeConstraintsDigest(constraints),
+            assessedAtUtcMs: TASK_FIXTURE_NOW,
+            maxEvidenceAgeMs: 24 * 60 * 60 * 1000,
+          },
+          triggers: {
+            newCloudApiServiceAppLibraryCliAccount: false,
+            authNetworkPrivacySecurityEncryptionBackupStorageChange: false,
+            protectedMedicalData: false,
+            feeOrFreeQuota: false,
+            osBrowserCompatibility: false,
+            largeTransfer: false,
+            irreversibleOperation: false,
+            ongoingMaintenance: false,
+          },
+          noTriggerAssessment: { reasonCode: 'LOCAL_SAFE_EDIT_NO_RISK_SIGNAL', justification: 'Bounded local helper fixture for project-intake selftest.' },
+          checklist: ['safety', 'dataPreservation', 'existingOverlap'].map((id) => ({
+            id, status: 'PASS', applicable: true,
+            justification: `${id} looks fine for this bounded fixture edit.`,
+            primarySourceRef: 'https://example.invalid/evidence',
+          })),
+          humanTopConditions: [],
+          deepResearch: null,
+        },
+        context: { proposalId: 'proposal-1', constraints, humanTopConditions: [] },
+      };
+    })(),
     ...overrides,
   };
 }
@@ -216,6 +261,52 @@ assert.deepEqual(validateOrchestrationTask(okTask), [], 'fixture task must be a 
   assert.equal(jobCode(task({ forbiddenScope: ['.git/**'] })), 'PROJECT_INTAKE_JOB_FORBIDDEN_SCOPE_REQUIRED');
   assert.equal(jobCode(task({ allowedScope: ['.git/**'] })), 'PROJECT_INTAKE_JOB_ALLOWED_SCOPE_INVALID');
   assert.equal(jobCode(task({ extra: 1 })), 'PROJECT_INTAKE_JOB_TASK_INVALID');
+}
+
+{
+  const low = renderPollerIssueFromTask(okTask);
+  assert.equal(low.result, 'PROCEED');
+  assert.equal(low.markdown, renderAiJobIssue(approved, manifest(), okTask).markdown, 'low-level renderer preserves approved intake output');
+  assert.equal(renderPollerIssueFromTask(task({ extra: 1 })).code, 'PROJECT_INTAKE_JOB_TASK_INVALID');
+  assert.equal(renderPollerIssueFromTask(task({ allowedScope: ['.git/**'] })).code, 'PROJECT_INTAKE_JOB_ALLOWED_SCOPE_INVALID');
+  const heading = renderPollerIssueFromTask(task({ prompt: 'safe\n## injected\n### also-injected' }));
+  assert.equal(heading.result, 'PROCEED');
+  assert(heading.markdown.includes('> ## injected\n> ### also-injected'));
+  assert.equal(heading.markdown.split('\n').filter((line) => /^\s*#{2,3}(?:\s|#|$)/u.test(line)).length, 5, 'low-level renderer cannot inject poller headings');
+}
+
+// REAL RECEIVING DEFECT regression: a caller of renderPollerIssueFromTask or
+// renderAiJobIssue directly (no agent-cycle/agent-job-bridge involved at
+// all) must still carry the raw research/instructionClarity evidence
+// forward as a single, decodable, uniquely-marked embedded envelope -- not
+// silently drop it. This is the exact "direct Project Intake" path the
+// bridge cannot see, so the embedding must live here, not only in the
+// bridge.
+function decodeEmbeddedResearchEnvelope(markdown) {
+  const matches = [...markdown.matchAll(/<!--\s*AGENT_CYCLE_JOB_RESEARCH_V1\s+([A-Za-z0-9_-]+)\s*-->/gu)];
+  return { matchCount: matches.length, value: matches.length === 1 ? JSON.parse(Buffer.from(matches[0][1], 'base64url').toString('utf8')) : null };
+}
+{
+  const directTask = task();
+  const direct = renderPollerIssueFromTask(directTask);
+  assert.equal(direct.result, 'PROCEED', 'direct renderPollerIssueFromTask call succeeds');
+  const markerCount = direct.markdown.split('AGENT_CYCLE_JOB_RESEARCH_V1').length - 1;
+  assert.equal(markerCount, 1, 'direct renderer embeds exactly one unique research envelope marker');
+  const decoded = decodeEmbeddedResearchEnvelope(direct.markdown);
+  assert.equal(decoded.matchCount, 1, 'exactly one decodable research envelope marker');
+  assert.deepEqual(decoded.value.research, directTask.research, 'direct renderer decoded research exactly equals the original task evidence');
+  assert.deepEqual(decoded.value.instructionClarity, directTask.instructionClarity, 'direct renderer decoded instructionClarity exactly equals the original task evidence');
+
+  // The higher-level renderAiJobIssue must produce the SAME embedded
+  // evidence as the lower-level renderer for the same task (single
+  // emission point, preserved equality between the two entry points).
+  // directTask's default objective already equals the approved brief's
+  // intent (both 'Build a small local helper.'), so it is reused as-is.
+  const viaIntake = renderAiJobIssue(approved, manifest(), directTask);
+  assert.equal(viaIntake.result, 'PROCEED');
+  const decodedViaIntake = decodeEmbeddedResearchEnvelope(viaIntake.markdown);
+  assert.equal(decodedViaIntake.matchCount, 1, 'renderAiJobIssue also embeds exactly one unique research envelope marker');
+  assert.deepEqual(decodedViaIntake.value, decoded.value, 'renderAiJobIssue and the direct low-level renderer embed identical evidence for the same task');
 }
 
 console.log('project-intake-gate selftest: PASS');

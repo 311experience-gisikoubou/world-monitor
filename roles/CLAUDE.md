@@ -12,6 +12,7 @@
 - 大きめのコード構造分析
 - 共通AI基盤（本repository）の設計・監査
 - ローカル実装・ローカルGit操作（ジョブ適性とrepositoryの明示制約が一致する場合）
+- qualified source実装・refactor・reviewの適性参照: 現在のqualification事実と評価基準は`PROJECT_CONTEXT.json`の`research-gate-and-ai-routing-v1`決定と`ai-task-router.mjs`を正本とする（詳細チェックリストはここで再掲しない）。
 
 ## 制約
 

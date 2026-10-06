@@ -57,6 +57,23 @@ try{
   assert(stagedContract.tests.includes('.agents/skills/test-gate/staged-reality-gate-selftest.mjs'));
   assert(stagedContract.activationEvidence.some(e=>e.path==='tools/portfolio-governance-audit.mjs'&&e.contains==='stagedRealityCurrent'));
 
+  const browserContract=CONTRACTS.find(c=>c.id==='ui-browser-lifecycle');
+  assert(browserContract,'ui browser lifecycle contract must be registered');
+  assert.equal(browserContract.required,'TECHNICAL');
+  assert(browserContract.impl.includes('.agents/skills/test-gate/ui-browser-lifecycle.mjs'));
+  assert(browserContract.tests.includes('.agents/skills/test-gate/ui-browser-lifecycle-selftest.mjs'));
+  assert(browserContract.activationEvidence.some(e=>e.path==='.agents/skills/test-gate/staged-reality-gate.mjs'&&e.contains==='UI_BROWSER_CLEANUP'));
+
+  const humanVisualContract=CONTRACTS.find(c=>c.id==='human-visual-review-readiness');
+  assert(humanVisualContract,'human visual review readiness contract must be registered');
+  assert.equal(humanVisualContract.required,'TECHNICAL');
+  assert(humanVisualContract.impl.includes('.agents/skills/test-gate/human-visual-review-gate.mjs'));
+  assert(humanVisualContract.tests.includes('.agents/skills/test-gate/human-visual-review-gate-selftest.mjs'));
+  assert(humanVisualContract.impl.includes('.agents/skills/test-gate/real-device-preparation-gate.mjs'));
+  assert(humanVisualContract.tests.includes('.agents/skills/test-gate/real-device-preparation-gate-selftest.mjs'));
+  assert(humanVisualContract.activationEvidence.some(e=>e.path==='AGENTS.md'&&e.contains==='HUMAN_VISUAL_REVIEW_READY_REQUIRED=YES'));
+  assert(humanVisualContract.activationEvidence.some(e=>e.path==='.agents/skills/test-gate/SKILL.md'&&e.contains==='human-visual-review-gate.mjs'));
+
   const routingContract=CONTRACTS.find(c=>c.id==='executable-implementation-routing');
   assert(routingContract,'executable implementation routing contract must be registered');
   assert.equal(routingContract.required,'TECHNICAL');

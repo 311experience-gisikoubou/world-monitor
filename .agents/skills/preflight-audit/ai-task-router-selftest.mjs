@@ -276,4 +276,96 @@ function routed(routes, task = baseTask()) {
   assert(unknownCost.result === 'STOP', 'unknown cost enum must fail closed');
 }
 
+// Research roles can never carry write/install authority, even if a route is otherwise qualified.
+{
+  const task = baseTask({ role: 'researchPrimary', requiredCapabilities: ['research'], requiredPermissions: ['repo-read'] });
+  const result = routed([
+    baseRoute({ id: 'write-capable', provider: 'p1', capabilities: ['research'], permissions: ['repo-read', 'repo-write'] }),
+    baseRoute({ id: 'read-only', provider: 'p2', capabilities: ['research'], permissions: ['repo-read'] }),
+  ], task);
+  assert(result.result === 'PROCEED' && result.selectedExecutor.id === 'read-only', 'research role must select the read-only route');
+  assert(result.role === 'researchPrimary', 'result must echo the requested role');
+  assert(result.rejectedRoutes.find((r) => r.id === 'write-capable').reasons.includes('RESEARCH_ROLE_WRITE_AUTHORITY_FORBIDDEN'), 'write-capable route must be rejected for a research role');
+}
+// Adversarial research prefers a provider distinct from the primary counterpart, and rejects the same provider without an explicit rationale.
+{
+  const task = baseTask({ role: 'researchAdversarial', requiredCapabilities: ['research'], requiredPermissions: ['repo-read'], counterpartProviderId: 'p1' });
+  const result = routed([
+    baseRoute({ id: 'same-no-rationale', provider: 'p1', capabilities: ['research'], permissions: ['repo-read'] }),
+    baseRoute({ id: 'distinct', provider: 'p2', capabilities: ['research'], permissions: ['repo-read'] }),
+  ], task);
+  assert(result.result === 'PROCEED' && result.selectedExecutor.id === 'distinct', 'adversarial research must prefer a distinct provider');
+  assert(result.rejectedRoutes.find((r) => r.id === 'same-no-rationale').reasons.includes('SAME_PROVIDER_ADVERSARIAL_RATIONALE_REQUIRED'), 'same-provider route without rationale must be rejected');
+}
+// Same-provider adversarial research is accepted only with an explicit distinctRouteRationale, and only when no distinct provider exists.
+{
+  const task = baseTask({ role: 'researchAdversarial', requiredCapabilities: ['research'], requiredPermissions: ['repo-read'], counterpartProviderId: 'p1' });
+  const result = routed([
+    baseRoute({
+      id: 'same-with-rationale', provider: 'p1', capabilities: ['research'], permissions: ['repo-read'],
+      distinctRouteRationale: 'Only one independently qualified provider is currently available for this capability.',
+    }),
+  ], task);
+  assert(result.result === 'PROCEED' && result.selectedExecutor.id === 'same-with-rationale',
+    'same-provider adversarial research with an explicit rationale must be accepted when no distinct provider exists');
+}
+// designer role routes like a qualification-gated executor, with no special restriction beyond the task's own declared requirements.
+{
+  const task = baseTask({ role: 'designer', requiredCapabilities: ['design'], requiredPermissions: ['repo-read'] });
+  const result = routed([baseRoute({ capabilities: ['design'], permissions: ['repo-read'] })], task);
+  assert(result.result === 'PROCEED' && result.role === 'designer', 'designer role must route like a qualification-gated executor');
+}
+// The explicit `role: 'reviewer'` task field routes through the dedicated reviewer branch, distinct from independentReviewRequired.
+{
+  const task = baseTask({ role: 'reviewer', requiredCapabilities: ['review'], requiredPermissions: ['repo-read'] });
+  const result = routed([baseRoute({ id: 'reviewer-route', capabilities: ['review'], permissions: ['repo-read'] })], task);
+  assert(result.result === 'PROCEED' && result.role === 'reviewer' && result.selectedExecutor.id === 'reviewer-route',
+    'explicit reviewer role must route via the reviewer branch');
+  assert(result.selectedReviewer === null, 'reviewer-role results do not populate selectedReviewer (that field belongs to the executor role\'s independent-review pairing)');
+}
+// Negative: explicit reviewer role must enforce ALL task.requiredCapabilities,
+// not a hardcoded 'review'-only check. A route with only ['review'] must be
+// rejected when the reviewer task also explicitly requires 'security-audit'.
+{
+  const task = baseTask({ role: 'reviewer', requiredCapabilities: ['review', 'security-audit'], requiredPermissions: ['repo-read'] });
+  const result = routed([
+    baseRoute({ id: 'review-only', capabilities: ['review'], permissions: ['repo-read'] }),
+  ], task);
+  assert(result.result === 'STOP' && result.code === 'NO_EXECUTOR_AVAILABLE',
+    `reviewer missing an explicitly required capability must not PROCEED: ${JSON.stringify(result)}`);
+  assert(result.rejectedRoutes.find((r) => r.id === 'review-only').reasons.includes('REVIEW_CAPABILITY_MISSING'),
+    'reviewer missing security-audit must be rejected with REVIEW_CAPABILITY_MISSING, not silently accepted');
+}
+// Positive: an explicit reviewer role with multiple requiredCapabilities routes once a route covers all of them.
+{
+  const task = baseTask({ role: 'reviewer', requiredCapabilities: ['review', 'security-audit'], requiredPermissions: ['repo-read'] });
+  const result = routed([
+    baseRoute({ id: 'review-only', capabilities: ['review'], permissions: ['repo-read'] }),
+    baseRoute({ id: 'review-and-security', capabilities: ['review', 'security-audit'], permissions: ['repo-read'] }),
+  ], task);
+  assert(result.result === 'PROCEED' && result.selectedExecutor.id === 'review-and-security',
+    `reviewer covering every required capability must PROCEED and be selected: ${JSON.stringify(result)}`);
+  assert(result.rejectedRoutes.find((r) => r.id === 'review-only').reasons.includes('REVIEW_CAPABILITY_MISSING'),
+    'the partially-capable reviewer route must still be reported as rejected for REVIEW_CAPABILITY_MISSING');
+}
+// Positive: the fix must not affect automatic independent-review selection for
+// a separate executor/implementation task -- a reviewer route with only
+// generic 'review' capability (no 'implementation') must still qualify.
+{
+  const task = baseTask({ independentReviewRequired: true, requiredCapabilities: ['implementation'] });
+  const result = routed([
+    baseRoute({ id: 'exec', provider: 'p1', capabilities: ['implementation'] }),
+    baseRoute({ id: 'reviewer-review-only', provider: 'p2', capabilities: ['review'], permissions: ['repo-read'] }),
+  ], task);
+  assert(result.result === 'PROCEED' && result.selectedReviewer?.id === 'reviewer-review-only',
+    `automatic independent review must not require the executor's own capabilities from the reviewer: ${JSON.stringify(result)}`);
+}
+// Unknown role / malformed counterpartProviderId values fail closed.
+{
+  assert(validateTask(baseTask({ role: 'architect' })).length > 0, 'validateTask must reject an unknown role');
+  assert(validateTask(baseTask({ counterpartProviderId: 'bad id with spaces' })).length > 0, 'validateTask must reject a malformed counterpartProviderId');
+  const result = routed([baseRoute()], baseTask({ role: 'architect' }));
+  assert(result.result === 'STOP' && result.code === 'SCHEMA_INVALID', 'unknown role must schema-stop routing');
+}
+
 console.log('ai-task-router selftest: PASS');

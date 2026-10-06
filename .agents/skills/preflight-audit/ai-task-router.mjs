@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { providerVendorKey } from './research-gate.mjs';
 
 const SAFE_DATA_CLASSES = new Set(['source-only', 'synthetic', 'public']);
 const PROTECTED_DATA_CLASSES = new Set([
@@ -32,6 +33,16 @@ const SAFE_PERMISSIONS = new Set([
 ]);
 const PERMISSIONS = new Set([...SAFE_PERMISSIONS, ...HUMAN_GATED]);
 
+// Role routing is a thin layer over the same hard safety/capability/
+// permission/cost/capacity qualification used for executor selection. It
+// never grants a role authority that the underlying route evaluation did
+// not already clear.
+const ROLES = new Set(['executor', 'designer', 'researchPrimary', 'researchAdversarial', 'reviewer']);
+const RESEARCH_ROLES = new Set(['researchPrimary', 'researchAdversarial']);
+// A research role must never carry repo-write/source-write/install authority:
+// research is evidence-gathering, not a source writer or install route.
+const RESEARCH_FORBIDDEN_PERMISSIONS = new Set(['repo-write', 'source-write', 'git-write', 'shell-write']);
+
 function safeToken(value) {
   return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(value);
 }
@@ -53,12 +64,13 @@ function intersects(values, blocked) {
 function publicRoute(route) {
   return route ? { id: route.id, provider: route.provider } : null;
 }
-function stop(code, taskId = null, rejectedRoutes = []) {
+function stop(code, taskId = null, rejectedRoutes = [], role = null) {
   return {
     schemaVersion: 1,
     result: 'STOP',
     code,
     taskId,
+    role,
     selectedExecutor: null,
     selectedReviewer: null,
     rejectedRoutes,
@@ -72,6 +84,8 @@ export function validateTask(task) {
   if (!task || typeof task !== 'object' || Array.isArray(task)) return ['task_not_object'];
   if (!safeToken(task.id)) errors.push('id_invalid');
   if (!TASK_KINDS.has(task.kind)) errors.push('kind_invalid');
+  if (task.role !== undefined && !ROLES.has(task.role)) errors.push('role_invalid');
+  if (task.counterpartProviderId !== undefined && !safeToken(task.counterpartProviderId)) errors.push('counterpartProviderId_invalid');
   if (!nonEmptyString(task.objective)) errors.push('objective_invalid');
   if (!stringArray(task.requiredCapabilities)) errors.push('requiredCapabilities_invalid');
   if (!everyIn(task.requiredPermissions, PERMISSIONS)) errors.push('requiredPermissions_invalid');
@@ -112,6 +126,9 @@ export function validateRoute(route) {
       (!Number.isInteger(route.jobFitScore) || route.jobFitScore < 0 || route.jobFitScore > 100)) {
     errors.push('jobFitScore_invalid');
   }
+  if (route.distinctRouteRationale !== undefined && !nonEmptyString(route.distinctRouteRationale)) {
+    errors.push('distinctRouteRationale_invalid');
+  }
   return errors;
 }
 
@@ -133,7 +150,7 @@ export function compareRoutes(a, b, { useMeasuredCapacity = false } = {}) {
   }
   return a.id.localeCompare(b.id, 'en');
 }
-function executorRejectionReasons(route, task) {
+function executorRejectionReasons(route, task, role = 'executor') {
   const reasons = [];
   if (route.availability !== 'AVAILABLE') reasons.push('ROUTE_UNAVAILABLE');
   if (route.safetyStatus !== 'SAFE_CONFIRMED') reasons.push('SAFETY_NOT_CONFIRMED');
@@ -145,6 +162,9 @@ function executorRejectionReasons(route, task) {
   if (task.costPolicy === 'no-new-cost' && route.incrementalCost === 'EXTRA') reasons.push('EXTRA_COST_NOT_ALLOWED');
   const forbidden = new Set([...HUMAN_GATED, ...task.forbiddenAuthorities]);
   if (intersects(route.permissions, forbidden)) reasons.push('FORBIDDEN_AUTHORITY_PRESENT');
+  if (RESEARCH_ROLES.has(role) && intersects(route.permissions, RESEARCH_FORBIDDEN_PERMISSIONS)) {
+    reasons.push('RESEARCH_ROLE_WRITE_AUTHORITY_FORBIDDEN');
+  }
   return reasons;
 }
 
@@ -164,12 +184,28 @@ function reviewerRequiredPermissions(task) {
   return [...required];
 }
 
-function reviewerRejectionReasons(route, task) {
+// `requireTaskCapabilities` distinguishes the two real call sites below:
+//  - explicit `task.role === 'reviewer'` routing (the reviewer IS the task):
+//    every declared task.requiredCapabilities (e.g. ['review','security-audit'])
+//    must actually be present on the route, not merely a hardcoded 'review'
+//    check -- that was the actual bug: a route with only ['review'] used to
+//    PROCEED for a task that explicitly required ['review','security-audit']
+//    too.
+//  - automatic independent-review selection for a separate executor/
+//    implementation task (`task.independentReviewRequired`): the reviewer
+//    only ever needs generic 'review' capability, never the EXECUTOR's own
+//    requiredCapabilities (e.g. 'implementation'/source-writing), since that
+//    would incorrectly demand the reviewer be able to do the executor's job.
+function reviewerRejectionReasons(route, task, { requireTaskCapabilities = false } = {}) {
   const reasons = [];
   if (route.availability !== 'AVAILABLE') reasons.push('REVIEW_ROUTE_UNAVAILABLE');
   if (route.safetyStatus !== 'SAFE_CONFIRMED') reasons.push('REVIEW_SAFETY_NOT_CONFIRMED');
   if (route.executionEnvironment !== task.executionEnvironment) reasons.push('REVIEW_ENVIRONMENT_MISMATCH');
-  if (!route.capabilities.includes('review')) reasons.push('REVIEW_CAPABILITY_MISSING');
+  if (requireTaskCapabilities) {
+    if (!includesAll(route.capabilities, task.requiredCapabilities)) reasons.push('REVIEW_CAPABILITY_MISSING');
+  } else if (!route.capabilities.includes('review')) {
+    reasons.push('REVIEW_CAPABILITY_MISSING');
+  }
   if (!route.permissions.some((permission) => permission.endsWith('-read'))) reasons.push('REVIEW_TARGET_READ_PERMISSION_MISSING');
   if (!includesAll(route.permissions, reviewerRequiredPermissions(task))) reasons.push('REVIEW_MISSING_READ_PERMISSION');
   if (!route.allowedDataClasses.includes(task.dataClass)) reasons.push('REVIEW_DATA_CLASS_NOT_ALLOWED');
@@ -222,35 +258,93 @@ export function routeTask(input) {
   if (taskErrors.length > 0) return stop('SCHEMA_INVALID');
   if (!Array.isArray(input.routes)) return stop('SCHEMA_INVALID', input.task.id);
   const task = input.task;
+  // Adversarial research without a declared counterpart provider is still
+  // valid (e.g. the only prior research step is external/manual); the
+  // distinctness preference below only applies when a counterpart is named.
+  const role = task.role ?? 'executor';
   if (HUMAN_GATED.has(task.kind) || PROTECTED_DATA_CLASSES.has(task.dataClass) ||
       intersects(task.requiredPermissions, HUMAN_GATED)) {
-    return stop('HUMAN_GATE_REQUIRED', task.id);
+    return stop('HUMAN_GATE_REQUIRED', task.id, [], role);
   }
 
   const validatedRoutes = [];
   for (const route of input.routes) {
-    if (validateRoute(route).length > 0) return stop('SCHEMA_INVALID', task.id);
+    if (validateRoute(route).length > 0) return stop('SCHEMA_INVALID', task.id, [], role);
     validatedRoutes.push(route);
   }
   const ids = validatedRoutes.map((route) => route.id);
-  if (new Set(ids).size !== ids.length) return stop('SCHEMA_INVALID', task.id);
+  if (new Set(ids).size !== ids.length) return stop('SCHEMA_INVALID', task.id, [], role);
+
+  if (role === 'reviewer') {
+    const reviewRejected = new Map();
+    const reviewEligible = [];
+    for (const route of validatedRoutes) {
+      // Explicit reviewer-role routing: this reviewer task's OWN declared
+      // requiredCapabilities (e.g. ['review','security-audit']) are the
+      // actual requirement, enforced in full.
+      const reasons = reviewerRejectionReasons(route, task, { requireTaskCapabilities: true });
+      if (reasons.length > 0) reviewRejected.set(route.id, reasons);
+      else reviewEligible.push(route);
+    }
+    if (reviewEligible.length === 0) {
+      const rejectedRoutes = [...reviewRejected.entries()].map(([id, reasons]) => ({ id, reasons }));
+      return stop('NO_EXECUTOR_AVAILABLE', task.id, rejectedRoutes, role);
+    }
+    const useCapacity = reviewEligible.every((route) => route.capacity.status === 'AVAILABLE');
+    const ranked = [...reviewEligible].sort((a, b) => compareRoutes(a, b, { useMeasuredCapacity: useCapacity }));
+    const selected = ranked[0];
+    const rejectedRoutes = [...reviewRejected.entries()]
+      .filter(([id]) => id !== selected.id)
+      .map(([id, reasons]) => ({ id, reasons }));
+    return {
+      schemaVersion: 1,
+      result: 'PROCEED',
+      taskId: task.id,
+      role,
+      selectedExecutor: publicRoute(selected),
+      selectedReviewer: null,
+      rejectedRoutes,
+      routingEvidence: routingEvidence(ranked),
+      handoff: buildHandoff(task, selected),
+    };
+  }
 
   const executorRejected = new Map();
   const executorEligible = [];
   for (const route of validatedRoutes) {
-    const reasons = executorRejectionReasons(route, task);
+    const reasons = executorRejectionReasons(route, task, role);
     if (reasons.length > 0) executorRejected.set(route.id, reasons);
     else executorEligible.push(route);
   }
 
-  if (executorEligible.length === 0) {
-    const rejectedRoutes = [...executorRejected.entries()].map(([id, reasons]) => ({ id, reasons }));
-    return stop('NO_EXECUTOR_AVAILABLE', task.id, rejectedRoutes);
+  let candidatePool = executorEligible;
+  if (role === 'researchAdversarial' && task.counterpartProviderId !== undefined) {
+    // Alias-normalized vendor comparison: a relabeled same-vendor route
+    // (e.g. 'claude' vs 'anthropic') must never be mistaken for an
+    // independent counterpart. Original provider labels are always
+    // preserved in routingEvidence/handoff; only this comparison normalizes.
+    const counterpartVendor = providerVendorKey(task.counterpartProviderId);
+    const distinct = candidatePool.filter((route) => providerVendorKey(route.provider) !== counterpartVendor);
+    const sameProviderWithRationale = candidatePool.filter(
+      (route) => providerVendorKey(route.provider) === counterpartVendor && nonEmptyString(route.distinctRouteRationale),
+    );
+    const sameProviderWithoutRationale = candidatePool.filter(
+      (route) => providerVendorKey(route.provider) === counterpartVendor && !nonEmptyString(route.distinctRouteRationale),
+    );
+    for (const route of sameProviderWithoutRationale) {
+      executorRejected.set(route.id, [...(executorRejected.get(route.id) || []), 'SAME_PROVIDER_ADVERSARIAL_RATIONALE_REQUIRED']);
+    }
+    candidatePool = distinct.length > 0 ? distinct : sameProviderWithRationale;
   }
 
-  const executorUseCapacity = executorEligible.every((route) => route.capacity.status === 'AVAILABLE');
+  if (candidatePool.length === 0) {
+    const rejectedRoutes = [...executorRejected.entries()].map(([id, reasons]) => ({ id, reasons }));
+    return stop('NO_EXECUTOR_AVAILABLE', task.id, rejectedRoutes, role);
+  }
+
+  const executorUseCapacity = candidatePool.every((route) => route.capacity.status === 'AVAILABLE');
   const executorComparator = (a, b) => compareRoutes(a, b, { useMeasuredCapacity: executorUseCapacity });
-  const ranked = [...executorEligible].sort(executorComparator);
+  const ranked = [...candidatePool].sort(executorComparator);
   const executor = ranked[0];
 
   let reviewer = null;
@@ -259,6 +353,9 @@ export function routeTask(input) {
     const reviewerEligible = [];
     for (const route of validatedRoutes) {
       if (route.id === executor.id) continue;
+      // Automatic independent-review pairing for THIS executor/implementation
+      // task: never require the executor's own requiredCapabilities (e.g.
+      // 'implementation') from the reviewer -- only generic 'review'.
       const reasons = reviewerRejectionReasons(route, task);
       if (reasons.length > 0) reviewerRejected.set(route.id, reasons);
       else reviewerEligible.push(route);
@@ -266,7 +363,8 @@ export function routeTask(input) {
     if (reviewerEligible.length > 0) {
       const reviewerUseCapacity = reviewerEligible.every((route) => route.capacity.status === 'AVAILABLE');
       const reviewerComparator = (a, b) => compareRoutes(a, b, { useMeasuredCapacity: reviewerUseCapacity });
-      const differentProvider = reviewerEligible.filter((route) => route.provider !== executor.provider);
+      const executorVendor = providerVendorKey(executor.provider);
+      const differentProvider = reviewerEligible.filter((route) => providerVendorKey(route.provider) !== executorVendor);
       reviewer = [...(differentProvider.length > 0 ? differentProvider : reviewerEligible)].sort(reviewerComparator)[0] ?? null;
     }
   }
@@ -286,6 +384,7 @@ export function routeTask(input) {
     schemaVersion: 1,
     result,
     taskId: task.id,
+    role,
     selectedExecutor: publicRoute(executor),
     selectedReviewer: publicRoute(reviewer),
     rejectedRoutes,

@@ -12,6 +12,7 @@ const gate = path.resolve(gateArg);
 const gateDir = path.dirname(gate);
 const { evaluateReceipt, verifyFinalReceipt } = await import(pathToFileURL(gate).href);
 const { computeChangeSetSha256, readHeadSha } = await import(pathToFileURL(path.join(gateDir, 'implementation-runner.mjs')).href);
+const { computeConstraintsDigest } = await import(pathToFileURL(path.join(gateDir, 'research-gate.mjs')).href);
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'route-receipt-'));
 let seq = 0;
@@ -46,11 +47,78 @@ const EVIDENCE_CHANGED_PATHS = ['src/widget.ts'];
 const baseTask = { id: 'task-1', kind: 'implementation' };
 const baseRepo = { owner: 'acme', name: 'widgets' };
 
+function clarityFor(taskId, overrides = {}) {
+  return {
+    schemaVersion: 1,
+    taskId,
+    instructions: [{ id: 'human-1', kind: 'INSTRUCTION', summary: 'Implement the requested bounded source change.' }],
+    unlistedAssumptionsPresent: false,
+    ambiguities: [],
+    ...overrides,
+  };
+}
+
+function minimalPassChecklist() {
+  return ['safety', 'dataPreservation', 'existingOverlap'].map((id) => ({
+    id, status: 'PASS', applicable: true,
+    justification: `${id} looks fine for this bounded fixture edit.`,
+    primarySourceRef: 'https://example.invalid/evidence',
+  }));
+}
+
+// A minimal, honest (not forged) BYPASS_LIGHT-shaped research envelope bound
+// to the exact taskId/repository/scope this receipt will be evaluated
+// against. decide() always independently re-evaluates this raw evidence; it
+// is never trusted on a caller-asserted result.
+function researchFor(taskId, overrides = {}) {
+  const repository = overrides.repository || baseRepo;
+  const scope = overrides.scope || ['src/widget.ts'];
+  const proposalId = overrides.proposalId || 'proposal-1';
+  const constraints = overrides.constraints || [];
+  const humanTopConditions = overrides.humanTopConditions || [];
+  const checklist = overrides.checklist || minimalPassChecklist();
+  return {
+    evidence: {
+      schemaVersion: 1,
+      evidenceBinding: {
+        taskId,
+        proposalId,
+        repository,
+        scope,
+        constraints,
+        constraintsDigestSha256: computeConstraintsDigest(constraints),
+        assessedAtUtcMs: Date.now(),
+        maxEvidenceAgeMs: 24 * 60 * 60 * 1000,
+      },
+      triggers: {
+        newCloudApiServiceAppLibraryCliAccount: false,
+        authNetworkPrivacySecurityEncryptionBackupStorageChange: false,
+        protectedMedicalData: false,
+        feeOrFreeQuota: false,
+        osBrowserCompatibility: false,
+        largeTransfer: false,
+        irreversibleOperation: false,
+        ongoingMaintenance: false,
+      },
+      noTriggerAssessment: { reasonCode: 'LOCAL_SAFE_EDIT_NO_RISK_SIGNAL', justification: 'Bounded local source edit fixture for receipt selftest.' },
+      checklist,
+      humanTopConditions: humanTopConditions.map((item) => ({ ...item, active: true })),
+      deepResearch: null,
+    },
+    context: {
+      proposalId,
+      constraints,
+      humanTopConditions: humanTopConditions.map((item) => ({ id: item.id, statement: item.statement })),
+    },
+  };
+}
+
 function preInput(overrides = {}) {
+  const task = overrides.task || baseTask;
   return {
     schemaVersion: 1,
     stage: 'pre-implementation',
-    task: baseTask,
+    task,
     executor: { id: 'claude-cli', provider: 'claude', routeType: 'qualified-agent' },
     repository: baseRepo,
     branch: 'feat/widget',
@@ -58,6 +126,8 @@ function preInput(overrides = {}) {
     dataClass: 'source-only',
     costPolicy: 'no-new-cost',
     requestedAuthorities: [],
+    instructionClarity: clarityFor(task.id),
+    research: researchFor(task.id),
     ...overrides,
   };
 }
@@ -74,6 +144,15 @@ function finalInput(overrides = {}) {
 // 1. normal source-only UI implementation with qualified Claude route -> PASS/PROCEED
 expect(preInput(), [], 'ROUTE_AUTHORIZED', 0);
 expect(finalInput(), [], 'FINAL_RECEIPT_ISSUED', 0);
+
+// Missing/failed clarity evidence must fail closed for source-write receipts.
+expect(preInput({ instructionClarity: undefined }), [], 'SCHEMA_INVALID', 2);
+expect(preInput({
+  instructionClarity: clarityFor('task-1', { unlistedAssumptionsPresent: true }),
+}), [], 'SCHEMA_INVALID', 2);
+expect(preInput({
+  instructionClarity: clarityFor('other-task'),
+}), [], 'SCHEMA_INVALID', 2);
 
 // 2. ChatGPT direct without exception -> STOP
 expect(preInput({ executor: { id: 'chatgpt-web', provider: 'chatgpt', routeType: 'direct-browser' } }), [], 'DIRECT_EXECUTOR_EXCEPTION_REQUIRED', 2);
@@ -140,6 +219,45 @@ expect(finalInput({ executionEvidence: { preHead: EVIDENCE_HEAD, changeSetSha256
 // extra: execution evidence is forbidden outside final qualified-agent receipts
 expect(preInput({ executionEvidence: { preHead: EVIDENCE_HEAD, changeSetSha256: EVIDENCE_CHANGE_SET, changedPaths: EVIDENCE_CHANGED_PATHS } }), [], 'SCHEMA_INVALID', 2);
 
+// --- Research Gate wiring: every source-write receipt (pre AND final) carries and re-evaluates a raw research envelope ---
+
+// missing research envelope entirely must fail schema-closed for a source-write receipt
+expect(preInput({ research: undefined }), [], 'SCHEMA_INVALID', 2);
+expect(finalInput({ research: undefined }), [], 'SCHEMA_INVALID', 2);
+
+// malformed research context (missing proposalId) must fail schema-closed
+expect(preInput({ research: { evidence: researchFor('task-1').evidence, context: { constraints: [], humanTopConditions: [] } } }), [], 'SCHEMA_INVALID', 2);
+
+// research is forbidden for non-source-write task kinds
+expect(preInput({ task: { id: 'task-review', kind: 'review' }, instructionClarity: undefined }), [], 'SCHEMA_INVALID', 2);
+
+// raw evidence with a checklist FAIL must block this receipt BEFORE any provider invocation, re-evaluated from scratch (never trusting a caller claim)
+expect(preInput({
+  research: researchFor('task-1', { checklist: [
+    { id: 'safety', status: 'FAIL', applicable: true, justification: 'A real safety concern exists.', primarySourceRef: 'https://example.invalid/evidence' },
+    { id: 'dataPreservation', status: 'PASS', applicable: true, justification: 'Fine.', primarySourceRef: 'https://example.invalid/evidence' },
+    { id: 'existingOverlap', status: 'PASS', applicable: true, justification: 'Fine.', primarySourceRef: 'https://example.invalid/evidence' },
+  ] }),
+}), [], 'RESEARCH_GATE_BLOCKED', 2);
+expect(finalInput({
+  research: researchFor('task-1', { checklist: [
+    { id: 'safety', status: 'FAIL', applicable: true, justification: 'A real safety concern exists.', primarySourceRef: 'https://example.invalid/evidence' },
+    { id: 'dataPreservation', status: 'PASS', applicable: true, justification: 'Fine.', primarySourceRef: 'https://example.invalid/evidence' },
+    { id: 'existingOverlap', status: 'PASS', applicable: true, justification: 'Fine.', primarySourceRef: 'https://example.invalid/evidence' },
+  ] }),
+}), [], 'RESEARCH_GATE_BLOCKED', 2);
+
+// evidence bound to a DIFFERENT task/repository/scope than this receipt must block, never pass through on name alone
+expect(preInput({ research: researchFor('some-other-task') }), [], 'RESEARCH_GATE_BLOCKED', 2);
+expect(preInput({ research: researchFor('task-1', { repository: { owner: 'someone-else', name: 'widgets' } }) }), [], 'RESEARCH_GATE_BLOCKED', 2);
+expect(preInput({ research: researchFor('task-1', { scope: ['other/**'] }) }), [], 'RESEARCH_GATE_BLOCKED', 2);
+// evidence bound to 'proposal-1' but the CURRENT (context) proposal has since changed -> must block, not pass on the evidence's own say-so
+expect(preInput({ research: { ...researchFor('task-1'), context: { ...researchFor('task-1').context, proposalId: 'other-proposal' } } }), [], 'RESEARCH_GATE_BLOCKED', 2);
+
+// a caller cannot assert its own 'ADOPT'/result on the raw evidence: the research-gate schema has no such field, so smuggling one in is rejected as an
+// unknown field by the independent re-evaluation inside decide() (never trusted on say-so), and the receipt blocks rather than silently passing through
+expect(preInput({ research: { evidence: { ...researchFor('task-1').evidence, result: 'ADOPT' }, context: researchFor('task-1').context } }), [], 'RESEARCH_GATE_BLOCKED', 2);
+
 // --- real-repository execution-evidence binding: prove the final gate recomputes and matches the actual committed change set ---
 const repoDir = path.join(tmpDir, 'repo');
 fs.mkdirSync(repoDir, { recursive: true });
@@ -198,10 +316,43 @@ const directVerified = verifyFinalReceipt(directDecision, {
   owner: 'acme', name: 'widgets', branch: 'feat/widget', head: realImplementationHead, repoRoot: repoDir,
 });
 assert(directVerified.result === 'MERGE_READY', `direct verifyFinalReceipt should be MERGE_READY: ${JSON.stringify(directVerified)}`);
+const strippedClarity = verifyFinalReceipt({ ...directDecision, instructionClarity: null }, {
+  owner: 'acme', name: 'widgets', branch: 'feat/widget', head: realImplementationHead, repoRoot: repoDir,
+});
+assert(strippedClarity.code === 'INSTRUCTION_CLARITY_EVIDENCE_MISSING_OR_FAILED',
+  'a source-write final receipt with missing clarity evidence must never become MERGE_READY');
 const directVerifiedNoRepo = verifyFinalReceipt(directDecision, {
   owner: 'acme', name: 'widgets', branch: 'feat/widget', head: realImplementationHead,
 });
 assert(directVerifiedNoRepo.code === 'REPO_ROOT_REQUIRED_FOR_EXECUTION_EVIDENCE', 'omitting repoRoot for a qualified-agent receipt must fail closed');
+
+// Receiving-side checks: successful issuance and a valid committed hash do not
+// authorize missing, altered or stale Research evidence.
+const receiverExpected = {
+  owner: 'acme', name: 'widgets', branch: 'feat/widget',
+  head: realImplementationHead, repoRoot: repoDir,
+};
+for (const alter of [
+  (receipt) => { delete receipt.research; receipt.researchGate = { result: 'ADOPT' }; },
+  (receipt) => { receipt.research.evidence.checklist[0].status = 'FAIL'; },
+  (receipt) => { receipt.research.evidence.checklist[0].status = 'UNKNOWN'; delete receipt.research.evidence.checklist[0].primarySourceRef; },
+  (receipt) => { receipt.research.evidence.evidenceBinding.assessedAtUtcMs = 0; },
+  (receipt) => { receipt.research.context.constraints = ['new-human-constraint']; },
+]) {
+  const altered = structuredClone(directDecision);
+  alter(altered);
+  assert(verifyFinalReceipt(altered, receiverExpected).code === 'RESEARCH_EVIDENCE_MISSING_OR_FAILED',
+    'bare ADOPT, FAIL, UNKNOWN, stale or mismatched raw evidence must not reach MERGE_READY');
+}
+const conditionChanged = structuredClone(directDecision);
+conditionChanged.research.evidence.humanTopConditions = [
+  { id: 'OTHER', active: true, statement: 'Mandatory protected-condition check.', linkedChecklistId: 'safety' },
+];
+conditionChanged.research.context.humanTopConditions = [
+  { id: 'OTHER', statement: 'Mandatory protected-condition check.', linkedChecklistId: 'dataPreservation' },
+];
+assert(verifyFinalReceipt(conditionChanged, receiverExpected).code === 'RESEARCH_EVIDENCE_MISSING_OR_FAILED',
+  'changing the current condition criterion while retaining its ID/statement must fail at the receiver');
 
 fs.rmSync(tmpDir, { recursive: true, force: true });
 console.log('implementation-route-receipt selftest: PASS');

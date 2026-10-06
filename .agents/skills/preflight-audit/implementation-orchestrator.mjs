@@ -4,7 +4,12 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { resolveProviderCommand } from './ai-provider-inventory.mjs';
 import { routeTask } from './ai-task-router.mjs';
-import { evaluateReceipt } from './implementation-route-receipt.mjs';
+import { evaluateReceipt, CHATGPT_DIRECT_GATED_KINDS as RECEIPT_RESEARCH_GATED_KINDS } from './implementation-route-receipt.mjs';
+import { evaluateInstructionClarity } from './instruction-clarity-gate.mjs';
+import {
+  evaluateResearchGateBound, blocksSourceWrite,
+  validateResearchEnvelopeShape, buildResearchExpectedBinding,
+} from './research-gate.mjs';
 import {
   ALLOWED_CAPABILITIES,
   ALLOWED_DATA_CLASSES,
@@ -22,6 +27,7 @@ const EXECUTION_ENVIRONMENT = 'local-cli-write';
 const ALLOWED_KEYS = new Set([
   'schemaVersion', 'taskId', 'kind', 'objective', 'prompt', 'repoRoot', 'branch',
   'allowedScope', 'forbiddenScope', 'doneConditions', 'requiredTests', 'dataClass', 'repository',
+  'instructionClarity', 'research',
 ]);
 
 function safeToken(value) {
@@ -44,6 +50,8 @@ function stop(code, extra = {}) {
     code,
     taskId: null,
     routing: null,
+    instructionClarity: null,
+    researchGate: null,
     preImplementationReceipt: null,
     runner: null,
     executionEvidence: null,
@@ -85,6 +93,22 @@ export function validateOrchestrationTask(payload) {
     if (!safeToken(repository.owner)) errors.push('repository_owner_invalid');
     if (!safeToken(repository.name)) errors.push('repository_name_invalid');
   }
+  // Deep ambiguity-vocabulary validation belongs to instruction-clarity-gate
+  // itself (called unconditionally before Claude is ever invoked). This is
+  // only the minimal shape/binding check: the field must be present and must
+  // declare the same taskId it is being supplied for, so a caller cannot
+  // attach unrelated clarity evidence to this task.
+  if (!payload.instructionClarity || typeof payload.instructionClarity !== 'object' || Array.isArray(payload.instructionClarity)) {
+    errors.push('instructionClarity_invalid');
+  } else if (payload.instructionClarity.taskId !== payload.taskId) {
+    errors.push('instructionClarity_taskId_mismatch');
+  }
+  // Every orchestrated task carries its own independent research envelope
+  // (raw Research Gate evidence plus current proposal/constraints/human-top-
+  // conditions context). This is a shape check only; runImplementationOrchestration
+  // independently re-evaluates the raw evidence BEFORE any provider probe or
+  // invocation, never trusting a caller-asserted result.
+  errors.push(...validateResearchEnvelopeShape(payload.research));
   return errors;
 }
 
@@ -140,15 +164,35 @@ export function runImplementationOrchestration(payload, {
   const schemaErrors = validateOrchestrationTask(payload);
   if (schemaErrors.length > 0) return stop('TASK_SCHEMA_INVALID', { taskId, schemaErrors });
 
+  const instructionClarity = evaluateInstructionClarity(payload.instructionClarity);
+  if (instructionClarity.result !== 'PROCEED') {
+    return stop('INSTRUCTION_CLARITY_NOT_CONFIRMED', { taskId, instructionClarity });
+  }
+
+  // The raw research envelope is independently re-evaluated here, BEFORE
+  // probeClaudeImplementationRunner (which actually spawns the Claude CLI to
+  // check subscription auth -- a real provider probe) or any later
+  // invocation. Expected taskId/repository/scope are built strictly from
+  // this task's own already-validated payload fields, never from the
+  // evidence, and a caller-asserted result is never trusted: the raw
+  // checklist/trigger/deepResearch evidence is recomputed from scratch.
+  const researchExpected = buildResearchExpectedBinding(payload.research, {
+    taskId: payload.taskId, repository: payload.repository, scope: payload.allowedScope,
+  });
+  const researchGate = evaluateResearchGateBound(payload.research.evidence, researchExpected);
+  if (blocksSourceWrite(researchGate)) {
+    return stop('RESEARCH_GATE_BLOCKED', { taskId, instructionClarity, researchGate });
+  }
+
   const probe = probeClaudeImplementationRunner({ desc, envSource, timeoutMs: Math.min(timeoutMs ?? 5000, 5000) });
   const route = buildRoute(probe);
   const routerTask = buildRouterTask(payload);
   const routing = routeTask({ schemaVersion: 1, task: routerTask, routes: [route] });
   if (routing.result !== 'PROCEED') {
-    return stop('ROUTE_NOT_AUTHORIZED', { taskId, routing });
+    return stop('ROUTE_NOT_AUTHORIZED', { taskId, instructionClarity, researchGate, routing });
   }
   if (routing.selectedExecutor?.id !== EXECUTOR_ID) {
-    return stop('UNEXPECTED_EXECUTOR_SELECTED', { taskId, routing });
+    return stop('UNEXPECTED_EXECUTOR_SELECTED', { taskId, instructionClarity, researchGate, routing });
   }
 
   const preImplementationReceipt = evaluateReceipt({
@@ -162,9 +206,11 @@ export function runImplementationOrchestration(payload, {
     dataClass: payload.dataClass,
     costPolicy: 'no-new-cost',
     requestedAuthorities: [],
+    instructionClarity: payload.instructionClarity,
+    ...(RECEIPT_RESEARCH_GATED_KINDS.has(payload.kind) ? { research: payload.research } : {}),
   });
   if (preImplementationReceipt.result !== 'PROCEED') {
-    return stop('PRE_IMPLEMENTATION_RECEIPT_REJECTED', { taskId, routing, preImplementationReceipt });
+    return stop('PRE_IMPLEMENTATION_RECEIPT_REJECTED', { taskId, instructionClarity, researchGate, routing, preImplementationReceipt });
   }
 
   // Independently re-verify the exact repository/branch and repository
@@ -175,11 +221,11 @@ export function runImplementationOrchestration(payload, {
   // pre-implementation receipt is treated as meaningfully bound to it.
   const repoCheck = verifyFeatureRepository(payload.repoRoot, payload.branch);
   if (!repoCheck.ok) {
-    return stop(repoCheck.code, { taskId, routing, preImplementationReceipt });
+    return stop(repoCheck.code, { taskId, instructionClarity, researchGate, routing, preImplementationReceipt });
   }
   const identityCheck = verifyRepositoryIdentity(repoCheck.resolvedRoot, payload.repository.owner, payload.repository.name);
   if (!identityCheck.ok) {
-    return stop(identityCheck.code, { taskId, routing, preImplementationReceipt });
+    return stop(identityCheck.code, { taskId, instructionClarity, researchGate, routing, preImplementationReceipt });
   }
 
   const runner = runClaudeImplementationTask({
@@ -193,9 +239,10 @@ export function runImplementationOrchestration(payload, {
     allowedScope: [...payload.allowedScope],
     forbiddenScope: Array.isArray(payload.forbiddenScope) ? [...payload.forbiddenScope] : [],
     repository: { owner: payload.repository.owner, name: payload.repository.name },
+    research: payload.research,
   }, { desc, envSource, timeoutMs });
   if (runner.result !== 'COMPLETED') {
-    return stop(runner.code || 'RUNNER_STOPPED', { taskId, routing, preImplementationReceipt, runner });
+    return stop(runner.code || 'RUNNER_STOPPED', { taskId, instructionClarity, researchGate, routing, preImplementationReceipt, runner });
   }
 
   return {
@@ -203,6 +250,8 @@ export function runImplementationOrchestration(payload, {
     result: 'COMPLETED',
     code: 'IMPLEMENTATION_ROUTED_AND_EXECUTED',
     taskId,
+    instructionClarity,
+    researchGate,
     routing,
     preImplementationReceipt,
     runner,

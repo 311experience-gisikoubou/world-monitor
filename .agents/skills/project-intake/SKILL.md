@@ -59,7 +59,8 @@ node .agents/skills/project-intake/project-intake-gate.mjs --brief-file <brief.j
 ## Downstream ownership
 
 The emitted packet points to the existing canonical mechanisms:
-- `preflight-audit` for security, ownership, cost, provider and route checks.
+- `preflight-audit` for security, ownership, cost, provider and route checks, including the Research Gate (`research-gate.mjs`) required after intake and before any source writer/install/account/config; see `preflight-audit/SKILL.md` for the canonical checklist semantics (not duplicated here).
+- `instruction-clarity-gate.mjs` for the AI-prepared clarity ledger; a source-write orchestrator payload is incomplete until this evidence is present and all material ambiguity is resolved.
 - `implementation-orchestrator.mjs` for the qualified implementation route.
 - `staged-reality-gate.mjs` and `test-gate` for objective intermediate/final verification.
 - `final-pr-audit` for merge-readiness.

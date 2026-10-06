@@ -62,13 +62,15 @@ or from any `LONG_RUNNING`/`NO_PROGRESS_WARNING` warning.
 - `.ai-jobs/` must be in the target repository `.gitignore`.
 - Target repository has the current Foundation `preflight-audit/implementation-orchestrator.mjs`.
 - New jobs require an explicit `ScopePaths`; patterns are exact repo-relative paths or `directory/**` only.
+- New jobs also require `-InstructionClarityFile <clarity.json>`. The file is created by the AI after applying `preflight-audit/instruction-clarity-gate.mjs`; the launcher rebinds its taskId to the concrete job, revalidates it, and stores it as job evidence. This is not a new human form or manual step.
+- New jobs also require `-ResearchEvidenceFile <research.json>`: an AI-prepared `{evidence, context}` Research Gate envelope (see `preflight-audit/research-gate.mjs`). The launcher safely REBINDS only `evidence.evidenceBinding.taskId` to this exact job's deterministic taskId (proposal/constraints/human-top-conditions/checklist/trigger evidence are preserved byte-for-byte), runs a fast-fail preflight check, and stores it as job evidence. `implementation-orchestrator.mjs` independently re-evaluates the raw evidence on every attempt; a REJECT/TRIAL_REQUIRED/stale/mismatched result blocks the attempt. This is not a new human form or manual step.
 - A `TestCommand` is required for `READY_FOR_REVIEW`; without one the job remains `GATE_INCOMPLETE`.
 
 ## Usage
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\run-claude-job.ps1 `
-  -RepoPath C:\dev\repo -PromptFile .\task.md -TaskName task `
+  -RepoPath C:\dev\repo -PromptFile .\task.md -InstructionClarityFile .\clarity.json -ResearchEvidenceFile .\research.json -TaskName task `
   -ScopePaths 'src/**','README.md' -TestCommand 'npm test'
 
 powershell -NoProfile -ExecutionPolicy Bypass -File .\check-claude-job.ps1 `

@@ -250,8 +250,10 @@ node .agents/skills/preflight-audit/implementation-route-receipt.mjs --input <fi
 - `MERGE_READY` requires the receipt's `stage: final` result to already be `PASS` and the repository/branch/head to exactly match the currently audited state; any mismatch returns a fail-closed repository/branch/head error and blocks `PREPARED_FOR_MERGE`.
 - Qualified-agent receipts must carry runner-generated `preHead`, `changeSetSha256`, and the exact sorted `changedPaths`. Final verification recomputes the committed change set, including modified, deleted, and newly added files; missing or mismatched execution evidence blocks merge readiness.
 - A missing receipt for an in-scope kind is a blocker, not `UNKNOWN`-and-proceed.
-- Direct-browser implementation has no runner-generated change-set proof and is accepted only through the existing closed exception vocabulary (`HUMAN_EXPLICIT_DIRECT`, `TRIVIAL_SAFE_LOCAL_EDIT`, or `NO_QUALIFIED_EXECUTOR_LOWER_RISK_DIRECT`) with explicit justification/evidence.
-- This receiving-side gate does not claim universal interception of browser turn start. It ensures that a qualified-agent implementation cannot become merge-ready without exact execution evidence, and it does not change merge-authorization semantics.
+- Source-writing receipts must also contain a `PROCEED` Instruction Clarity result bound to the same task. Missing/failed clarity evidence, hidden assumptions, unresolved material ambiguity, or a task-ID mismatch is a blocker; `verifyFinalReceipt` must return `INSTRUCTION_CLARITY_EVIDENCE_MISSING_OR_FAILED` rather than `MERGE_READY` if that evidence is stripped or invalid.
+- Source-writing receipts must also carry a schema-valid Research Gate evidence envelope that independently re-evaluates to `ADOPT`/`BYPASS_LIGHT`; a missing, stripped, FAIL, or `TRIAL_REQUIRED` raw evidence set returns `RESEARCH_EVIDENCE_MISSING_OR_FAILED` rather than `MERGE_READY`. The Research Gate checklist semantics (28 IDs, Deep-Research-equivalent triggers, human top conditions) live only in `preflight-audit/SKILL.md`; this gate only checks that the already-bound evidence still clears.
+- Direct-browser implementation has no runner-generated change-set proof and is accepted only through the existing closed exception vocabulary (`HUMAN_EXPLICIT_DIRECT`, `TRIVIAL_SAFE_LOCAL_EDIT`, or `NO_QUALIFIED_EXECUTOR_LOWER_RISK_DIRECT`) with explicit justification/evidence. The exception does **not** bypass Instruction Clarity; both conditions are required.
+- This receiving-side gate does not claim universal interception of browser turn start. It ensures that source implementation cannot become merge-ready without the required clarity evidence and, for qualified-agent routes, exact execution evidence. It does not change merge-authorization semantics.
 
 ### Final Reality Check Gate
 
@@ -354,3 +356,8 @@ Report:
 ## Application-Specific Configuration
 
 The exact build/test/lint/type-check commands, dependency-manifest file names, migration conventions, forbidden scope, and repository-specific PR status conventions come from that repository's `AGENTS.local.md` — specifically its "Repository Commands", "Forbidden Scope", "Migration Rules", and PR/GitHub sections. This skill names no specific language, package manager, or framework.
+### Design Canonical Promotion Gate
+
+`DESIGN_CANONICAL_PROMOTION_REQUIRED=WHEN_CONFIGURED`
+
+If the Canonical Contract enables `approval-scope-gate` / `canonical-promotion-gate`, final audit requires PASS for the exact current HEAD before `PREPARED_FOR_MERGE=yes`. CURRENT DESIGN is blocked when final whole-screen/app approval or canonical-promotion intent is absent, approval scope is lower than artifact scope, lifecycle skips a state, DESIGN_REFERENCE lineage/hash is unknown, approval head/content differs, content changed after approval, or the newest explicit human correction says the design is still WIP/not final/not canonical. Functional/UI test PASS never overrides this gate.

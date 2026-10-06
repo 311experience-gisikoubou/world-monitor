@@ -13,6 +13,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$RepoPath,
     [Parameter(Mandatory = $true)][string]$PromptFile,
+    [string]$InstructionClarityFile,
+    [string]$ResearchEvidenceFile,
     [ValidatePattern('^[A-Za-z0-9-]{1,40}$')][string]$TaskName = 'task',
     [string]$ContinueJob,
     [string[]]$ScopePaths,
@@ -26,8 +28,19 @@ param(
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+# Owned temporary files created ONLY when this launcher fills a missing
+# -InstructionClarityFile/-ResearchEvidenceFile from the unique embedded
+# AGENT_CYCLE_JOB_RESEARCH_V1 envelope inside -PromptFile (the real poller
+# path: scripts/ai-job-poller/poll-once.ps1 passes PromptFile only). Never a
+# second persistent state: each is removed as soon as its content is read
+# into memory, and Fail() below removes any that remain on any rejection.
+$script:bridgeExtractionTempFiles = @()
 
-function Fail([string]$msg) { Write-Host "[STOP] $msg" -ForegroundColor Red; exit 1 }
+function Fail([string]$msg) {
+    foreach ($f in @($script:bridgeExtractionTempFiles)) { Remove-Item $f -ErrorAction SilentlyContinue }
+    Write-Host "[STOP] $msg" -ForegroundColor Red
+    exit 1
+}
 function Q([string]$s) { '"' + ($s -replace '"', '\"') + '"' }
 function Save-Json($obj, [string]$path) { [IO.File]::WriteAllText($path, ($obj | ConvertTo-Json -Depth 8), $utf8) }
 function Prop($o, [string]$n) { if ($o -and $o.PSObject.Properties[$n]) { $o.$n } else { $null } }
@@ -63,6 +76,14 @@ function Process-MatchesIdentity([int]$processId, $startTicks) {
 if (-not (Test-Path $RepoPath -PathType Container)) { Fail "RepoPath not found: $RepoPath" }
 if (-not (Test-Path $PromptFile -PathType Leaf)) { Fail "PromptFile not found: $PromptFile" }
 $PromptFile = (Resolve-Path $PromptFile).Path
+if ($InstructionClarityFile) {
+    if (-not (Test-Path $InstructionClarityFile -PathType Leaf)) { Fail "InstructionClarityFile not found: $InstructionClarityFile" }
+    $InstructionClarityFile = (Resolve-Path $InstructionClarityFile).Path
+}
+if ($ResearchEvidenceFile) {
+    if (-not (Test-Path $ResearchEvidenceFile -PathType Leaf)) { Fail "ResearchEvidenceFile not found: $ResearchEvidenceFile" }
+    $ResearchEvidenceFile = (Resolve-Path $ResearchEvidenceFile).Path
+}
 $top = git -C $RepoPath rev-parse --show-toplevel 2>$null
 if ($LASTEXITCODE -ne 0 -or -not $top) { Fail "Not a git repository: $RepoPath" }
 $top = [IO.Path]::GetFullPath($top.Trim())
@@ -91,8 +112,10 @@ $today = Get-Date -Format 'yyyyMMdd'
 $n = @(Get-ChildItem $jobsRoot -Directory -Filter "$today-*" -ErrorAction SilentlyContinue).Count + 1
 do { $jobId = '{0}-{1:000}' -f $today, $n; $n++ } while (Test-Path (Join-Path $jobsRoot $jobId))
 
+$continuationDirty = @()
 if ($ContinueJob) {
-    $prevPath = Join-Path (Join-Path $jobsRoot $ContinueJob) 'status.json'
+    $prevJobDir = Join-Path $jobsRoot $ContinueJob
+    $prevPath = Join-Path $prevJobDir 'status.json'
     if (-not (Test-Path $prevPath)) { Fail "Continuation job not found: $ContinueJob" }
     $prev = Get-Content $prevPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($prev.state -in @('STARTING','RUNNING','GATES_RUNNING')) {
@@ -117,12 +140,43 @@ if ($ContinueJob) {
     if ($dirty.Count -gt 0) {
         $outside = @($dirty | Where-Object { -not (In-Scope $_ @($ScopePaths)) })
         if ($outside.Count -gt 0) { Fail "Cannot checkpoint continuation: out-of-scope changes exist: $($outside -join ', ')" }
-        git -C $wtPath add -A
-        if ($LASTEXITCODE -ne 0) { Fail 'Failed to stage continuation checkpoint.' }
-        git -C $wtPath commit -m "chore(ai-job): checkpoint $ContinueJob"
-        if ($LASTEXITCODE -ne 0) { Fail 'Failed to create continuation checkpoint commit.' }
+        $continuationDirty = $dirty
     }
 } else {
+    # Explicit -InstructionClarityFile/-ResearchEvidenceFile always take
+    # precedence. Only when one (or both) is absent, attempt a bounded,
+    # read-only extraction of the unique embedded research envelope from
+    # PromptFile itself via the existing agent-job-bridge.mjs parser (never a
+    # placeholder/trigger:false/ADOPT fabrication on failure). This recovers
+    # exactly the evidence lost on the real poller path, which only ever
+    # forwards PromptFile.
+    if (-not $InstructionClarityFile -or -not $ResearchEvidenceFile) {
+        $bridgeScript = Join-Path $top '.agents\skills\preflight-audit\agent-job-bridge.mjs'
+        if (Test-Path $bridgeScript) {
+            $extractRaw = & node $bridgeScript --extract-research-envelope $PromptFile 2>$null
+            $extractExit = $LASTEXITCODE
+            if ($extractExit -eq 0) {
+                $extracted = $null
+                try { $extracted = ($extractRaw -join "`n") | ConvertFrom-Json } catch { $extracted = $null }
+                if ($extracted -and $extracted.ok -eq $true -and $extracted.value) {
+                    if (-not $InstructionClarityFile) {
+                        $clarityTemp = [IO.Path]::GetTempFileName()
+                        Save-Json $extracted.value.instructionClarity $clarityTemp
+                        $InstructionClarityFile = $clarityTemp
+                        $script:bridgeExtractionTempFiles += $clarityTemp
+                    }
+                    if (-not $ResearchEvidenceFile) {
+                        $researchTemp = [IO.Path]::GetTempFileName()
+                        Save-Json $extracted.value.research $researchTemp
+                        $ResearchEvidenceFile = $researchTemp
+                        $script:bridgeExtractionTempFiles += $researchTemp
+                    }
+                }
+            }
+        }
+    }
+    if (-not $InstructionClarityFile) { Fail 'InstructionClarityFile is required for a new job (no explicit file, and no unique embedded research envelope was found in PromptFile).' }
+    if (-not $ResearchEvidenceFile) { Fail 'ResearchEvidenceFile is required for a new job (AI-prepared Research Gate evidence; no new human form, and no unique embedded research envelope was found in PromptFile).' }
     if (-not $ScopePaths -or @($ScopePaths).Count -eq 0) { Fail 'ScopePaths is required for a new job.' }
     foreach ($p in @($ScopePaths)) {
         $segments = @($p.Split('/'))
@@ -159,6 +213,42 @@ if ($ContinueJob) {
     if (Test-Path $wtPath) { Fail "Worktree path already exists: $wtPath" }
 }
 
+# Re-evaluate the complete envelope before checkpoint/worktree/background job.
+# Rebind only taskId and record its prior identity; preserve the previous context.
+$orchestratorTaskId = 'claude-job-' + ($jobId -replace '[^A-Za-z0-9._:-]','-')
+$researchSource = $ResearchEvidenceFile
+if (-not $researchSource -and $ContinueJob) { $researchSource = Join-Path $prevJobDir 'research.json' }
+if (-not $researchSource -or -not (Test-Path $researchSource -PathType Leaf)) { Fail 'Research Gate evidence is missing.' }
+try { $research = Get-Content $researchSource -Raw -Encoding UTF8 | ConvertFrom-Json } catch { Fail 'Research Gate evidence is not valid JSON.' }
+if ($script:bridgeExtractionTempFiles -contains $researchSource) {
+    Remove-Item $researchSource -ErrorAction SilentlyContinue
+    $script:bridgeExtractionTempFiles = @($script:bridgeExtractionTempFiles | Where-Object { $_ -ne $researchSource })
+}
+if (-not (Prop $research 'evidence') -or -not (Prop $research.evidence 'evidenceBinding')) { Fail 'Research Gate evidence is missing evidence.evidenceBinding.' }
+$originalResearchTaskId = Prop $research.evidence.evidenceBinding 'taskId'
+if ($originalResearchTaskId -isnot [string] -or $originalResearchTaskId -notmatch '^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$') { Fail 'Original Research task identity is invalid.' }
+$researchSourceTaskId = $originalResearchTaskId
+$research.evidence.evidenceBinding.taskId = $orchestratorTaskId
+$researchPacket = [ordered]@{
+    schemaVersion = 1
+    research = $research
+    taskBinding = @{ taskId = $orchestratorTaskId; repository = @{ owner = $repoId.owner; name = $repoId.name }; scope = @($ScopePaths) }
+}
+if ($ContinueJob -and (Test-Path (Join-Path $prevJobDir 'research.json') -PathType Leaf)) {
+    try { $previousResearch = Get-Content (Join-Path $prevJobDir 'research.json') -Raw -Encoding UTF8 | ConvertFrom-Json } catch { Fail 'Previous Research evidence is invalid.' }
+    $researchPacket['previousContext'] = $previousResearch.context
+}
+$researchGate = Join-Path $top '.agents\\skills\\preflight-audit\\research-gate.mjs'
+if (-not (Test-Path $researchGate)) { Fail 'research-gate.mjs is missing in repository.' }
+$researchPacketFile = [IO.Path]::GetTempFileName()
+$researchExit = 2
+try {
+    Save-Json $researchPacket $researchPacketFile
+    & node $researchGate --task-envelope-file $researchPacketFile | Out-Null
+    $researchExit = $LASTEXITCODE
+} finally { Remove-Item $researchPacketFile -ErrorAction SilentlyContinue }
+if ($researchExit -ne 0) { Fail 'Research Gate did not clear the current task/scope/conditions; no source job or worktree was started.' }
+
 try {
     $launcherStartTicks = [int64](Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks
     $lockSeed = [ordered]@{
@@ -179,6 +269,12 @@ try {
 catch { Fail 'Could not acquire repository job lock.' }
 
 try {
+    if ($ContinueJob -and @($continuationDirty).Count -gt 0) {
+        git -C $wtPath add -A
+        if ($LASTEXITCODE -ne 0) { Fail 'Failed to stage continuation checkpoint.' }
+        git -C $wtPath commit -m "chore(ai-job): checkpoint $ContinueJob"
+        if ($LASTEXITCODE -ne 0) { Fail 'Failed to create continuation checkpoint commit.' }
+    }
     if (-not $ContinueJob) {
         git -C $top worktree add -q -b $branch $wtPath $rootBase
         if ($LASTEXITCODE -ne 0) { throw 'git worktree add failed' }
@@ -186,11 +282,36 @@ try {
     $jobDir = Join-Path $jobsRoot $jobId
     New-Item -ItemType Directory -Force -Path $jobDir | Out-Null
     Copy-Item $PromptFile (Join-Path $jobDir 'prompt.md')
+
+    $claritySource = $InstructionClarityFile
+    if (-not $claritySource -and $ContinueJob) { $claritySource = Join-Path $prevJobDir 'instruction-clarity.json' }
+    if (-not $claritySource -or -not (Test-Path $claritySource -PathType Leaf)) { throw 'Instruction clarity evidence is missing.' }
+    try { $clarity = Get-Content $claritySource -Raw -Encoding UTF8 | ConvertFrom-Json } catch { throw 'Instruction clarity evidence is not valid JSON.' }
+    if ($script:bridgeExtractionTempFiles -contains $claritySource) {
+        Remove-Item $claritySource -ErrorAction SilentlyContinue
+        $script:bridgeExtractionTempFiles = @($script:bridgeExtractionTempFiles | Where-Object { $_ -ne $claritySource })
+    }
+    $orchestratorTaskId = 'claude-job-' + ($jobId -replace '[^A-Za-z0-9._:-]','-')
+    if (-not $clarity.PSObject.Properties['taskId']) { $clarity | Add-Member -NotePropertyName taskId -NotePropertyValue $orchestratorTaskId }
+    else { $clarity.taskId = $orchestratorTaskId }
+    $clarityPath = Join-Path $jobDir 'instruction-clarity.json'
+    Save-Json $clarity $clarityPath
+    $clarityGate = Join-Path $top '.agents\skills\preflight-audit\instruction-clarity-gate.mjs'
+    if (-not (Test-Path $clarityGate)) { throw 'instruction-clarity-gate.mjs is missing in repository.' }
+    & node $clarityGate --input $clarityPath | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Instruction clarity gate did not pass.' }
+
+    $researchPath = Join-Path $jobDir 'research.json'
+    Save-Json $research $researchPath
+
     $status = [ordered]@{
         job_id = $jobId; task = $TaskName; continued_from = $ContinueJob; state = 'STARTING'
         repo = $top; repository_owner = $repoId.owner; repository_name = $repoId.name
         worktree = $wtPath; branch = $branch; root_base_commit = $rootBase
         scope_paths = @($ScopePaths); test_command = $TestCommand
+        instruction_clarity_file = 'instruction-clarity.json'
+        research_evidence_file = 'research.json'
+        research_source_task_id = $researchSourceTaskId
         provider_timeout_minutes = $ProviderTimeoutMinutes
         max_auto_retries = [Math]::Min(2, $MaxAutoRetries); attempt = 0; auto_retries_used = 0; retry_stop_code = $null
         started_at = (Get-Date).ToString('o'); runner_pid = $null

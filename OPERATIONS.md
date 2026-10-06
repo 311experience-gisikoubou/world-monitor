@@ -19,6 +19,20 @@
 - 現行のsource実装では、qualificationを満たす間はClaude CLIの`claude-implementation-write`を第一実装経路とし、ChatGPTは仕様整理・設計・オーケストレーション・最終監査を既定担当とする。Codexのwrite経路は別途qualificationするまで実装フォールバックとして扱わず、Gemini/Antigravityは別途qualificationされるまでは独立レビュー・代替分析を主用途とする。ChatGPTによる直接source実装は閉じた例外理由がある場合だけとし、通常経路にはしない（`learnings/L-0006.md`参照）。
 - For Claude implementation that may outlive the outer tool wait, use `long-task-wait/claude-job`: launch and status are short calls, model execution stays inside the existing `implementation-orchestrator.mjs`, 60 minutes is warning-only, one repository has one active job, out-of-scope changes fail closed, and only the outer runner may create DONE.
 
+## Instruction Clarity Gate
+
+人間の自然言語・口頭指示からsource実装へ進む場合、AIは意味のある曖昧さを勝手に補完しない。実装前に既存`preflight-audit`の `instruction-clarity-gate.mjs` へ、現在タスクの明示指示・制約、既知の曖昧点、AIが置く仮定、既に解消済みの人間判断を閉じた機械可読形式で渡す。
+
+- 承認済みscope/正本、利用者に見えるdesign/behavior、業務意味・workflow、security/privacy/data handling、継続費用、破壊的操作、その他の人間価値判断を解釈次第で変え得る曖昧さは `MATERIAL` とする。人間の明示clarificationが記録されるまでsource実装をSTOPし、質問はその未解決点だけに絞る。
+- AIだけで安全に決められる実装方式・Git/network/configuration等の技術詳細、または承認済み意図を変えない安全・可逆な細部は `NON_MATERIAL` とし、人間へ技術判断を返さない。仮定を置く場合は機械可読証拠へ明示し、hidden assumptionはSTOPする。
+- 一度解消した人間判断はHuman Decision Sync等の既存authorityへ結び、同じ論点を再質問しない。
+- `implementation-orchestrator.mjs` はclarityが `PROCEED` になる前にsource writerを起動してはならない。`implementation-route-receipt.mjs` はsource-write taskのpre/final receiptでも同じclarity evidenceを再評価し、欠落・FAIL・task不一致ならfinal `MERGE_READY`を拒否する。
+- Human Decision Sync、Canonical Contract、Approved Baseline Preservation、`UI_REFERENCE_REPRODUCTION`のzero-unresolved-ambiguity、privacy/cost/destructive/merge authorization等の既存強制はそのまま優先し、このgateを理由に弱めない。
+
+```text
+node .agents/skills/preflight-audit/instruction-clarity-gate.mjs --input <clarity.json> --pretty
+```
+
 ## Simplest Safe Design
 
 安全性と自動化を両立したうえで、設計・実装・運用は可能な限り単純に保つ。
@@ -72,6 +86,39 @@
 ```
 
 `project-intake`は既存gateの前段整理だけを担う。安全・provider選択・source実装・途中確認・test・PR監査・merge承認を別系統で再実装しない。`FULL`は患者/保護データ、外部通信、追加費用、本人認証、本番影響、実データ影響のどれかがある場合に自動選択し、それ以外は`LIGHT`とする。`LIGHT`も既存の最低安全ラインを外さない。技術stack別starterはrepository-localとし、AI間handoffはrepository artifactを優先する。
+
+project-intake承認後、source writer・install・account作成・config変更・外部サービス採用の前に`.agents/skills/preflight-audit/research-gate.mjs`（Research Gate）を必ず通す。28項目の閉じたchecklist semantics・PASS/FAIL/UNKNOWN判定・risk-basedなDeep-Research-equivalent要求・human top condition・`ADOPT`/`TRIAL_REQUIRED`/`REJECT`/`STOP`の正本は`preflight-audit/SKILL.md`の該当節だけであり、ここでは複製しない。Research Gateは経路選択・provider起動・merge権限を持たず、`implementation-orchestrator.mjs`・`implementation-route-receipt.mjs`・既存Job Runner（`run-claude-job.ps1`）がsource writer起動前にこの生evidenceを独立再評価する受け側ゲートである。
+
+## Bounded Agent Cycle（trial）
+
+承認済みの目的を「次は？」の人間往復なしで安全に進めるため、新しい常駐agent platformを作らず、既存機構を束ねる最小の1-cycle coordinatorを試験運用する。
+
+```text
+Human-approved goal / Human Decision Sync
+→ Project Working Memory（Current Goal / Next Step）
+→ agent-cycle.mjs（stale確認・候補から1件選択）
+→ INLINE: existing implementation-orchestrator
+   LONG_TASK: agent-job-bridge PREPARE
+              → approved GitHub Issue-create route
+              → existing ai-job-poller
+              → existing work-state-report
+              → agent-job-bridge RESUME
+→ staged reality / test-gate / final-pr-audit / human merge approval
+→ ADVANCE_READYなら既存Project Working MemoryのNext Stepを更新
+→ 次cycle
+```
+
+- 状態の正本を増やさない。Agent Cycle専用DBや`agent-state.json`は作らず、現在目的・次の一手は既存Project Working Memoryを使う。
+- 1回の呼び出しで選択・実行するtaskは最大1件。staleな`goalId` / `expectedNextStep`、blocked task、schema外入力はfail closedにする。
+- task候補の選択は優先度の小さい順、同値なら入力順で決定する。候補の自動発明・独自優先順位AIはまだ追加しない。
+- `PLAN`は選択だけでsourceを変更しない。`EXECUTE + INLINE`は既存`implementation-orchestrator.mjs`へ委譲する。
+- `EXECUTE + LONG_TASK`は直接Claudeを起動せず、`agent-job-bridge PREPARE`で既存poller互換の`ai-job` Issue payloadへ変換する。Bridge自身はGitHub操作・PowerShell・Task Scheduler・Claude起動を行わない。
+- Issue作成後の候補選択・実行・再試行・Draft PR化は既存`ai-job-poller`が担当する。新しいlauncherやqueueは作らない。
+- 完了確認は既存`work-state-report`を正本とし、Bridgeの`RESUME`はcanonical stageだけを使って`WAIT / WAIT_HUMAN / STOP / ADVANCE_READY / COMPLETED`へ変換する。proseから状態を推測しない。
+- `ADVANCE_READY`になった場合だけ、既存Project Working Memory経路でNext Stepを更新する。Bridge専用stateは保存しない。
+- source実装が終わっても検証完了とは扱わない。途中確認・test・final audit・merge承認は既存経路をそのまま残す。
+- push / PR / merge / 追加課金 / 本番操作 / 人間判断の権限は追加しない。Scheduled Taskの有効/無効やWindows execution policyもBridgeは変更しない。
+- イベント起動や候補自動生成は、実運用でIssue queue・poller・observerだけでは不足すると証明された場合のみ追加を検討する。
 
 ## Layered AI Rule Loading
 
@@ -143,6 +190,19 @@ The staged checks are executed through `.agents/skills/test-gate/staged-reality-
 - merge後はpost-merge-verificationを行い、PRがMERGEDであること、squash commit、親関係、必要なtree整合、必要なlocal main同期、working tree cleanを確認する。local checkoutを運用上使用しないrepositoryでは、そのlocal同期項目を機械的に作らず、実際の運用経路に必要なpost-merge証拠を使う。
 
 この共通ルーティンに対し、各application repositoryは`AGENTS.local.md`で技術スタック固有のテスト、実機確認条件、禁止領域、正本ドキュメント等を追加する。
+
+## Human Visual Review Readiness
+
+人間へUIの主観確認を依頼する直前は、通常のFINAL REALITY PASSだけでなく、`.agents/skills/test-gate/human-visual-review-gate.mjs`の`HUMAN_VISUAL_REVIEW_READY_V1` receiptを必須とする。
+
+- gateは exact state のFINAL staged-reality receiptを再検証し、現在のUI候補と証拠を同じstateへ束縛する。
+- application repositoryがTauri/native/mobile等の実アプリsurfaceを指定している場合、通常browser、Vite直開き、file:// prototype、CDP page、PNG/image viewerを人間確認surfaceとして代用しない。
+- AIが測ったwindowと人間へ前面表示するwindowを同一IDで証明し、visible/foreground、project/worktree provenance、non-production data/environmentを確認する。proofは30分以内を必須とし、古い計測を再起動・resize後の確認へ流用しない。
+- page/screenは`clientWidth/clientHeight/scrollWidth/scrollHeight`、必須領域はbounding rect・visible width/height・client/scroll値という生の実測値を入力し、gate側でoverflow・viewport内包含・clippingを計算する。callerの「切れていない」booleanだけをPASS根拠にしない。required regionが画面外・切れ・未許可overflowならSTOPする。
+- receiptがない、stateが変わった、surfaceが違う、windowが違う場合は「確認画面を開いた」「確認してください」「採用してください」と人間へ依頼しない。AI側の修正・再計測へ戻る。
+- このgateは人間の主観判断そのものを自動化しない。技術的に確認可能な表示欠け・surface誤り・provenance誤りを人間へ持ち込む前に除去するための入口である。
+
+`HUMAN_VISUAL_REVIEW_READY_REQUIRED=YES`
 
 ## Safe Continuous Workflow
 
@@ -229,6 +289,9 @@ The foundation does not require an always-on hourly GitHub Actions schedule in e
 - Remote Desktop Commander の one-shot コマンドはシェル層を1つにする。必要でない限り、PowerShell の中で `powershell -Command` を入れ子にしない。
 - one-shot セッションが実際に終了したことを確認する（残留プロセスを放置しない）。
 - 意図的に起動した長寿命の dev server / tunnel は自動 kill しない。
+- UI確認・スクリーンショット・CDP・Playwright連携でChromeを起動する場合は、共通の `.agents/skills/test-gate/ui-browser-lifecycle.mjs` を使用し、専用profile・動的loopback CDP port・run metadata・heartbeatを持たせる。通常Chrome/Edge/未管理profileは終了対象にしない。
+- UI検証は `start -> use -> finally -> cleanup` を崩さない。FINALでは `UI_BROWSER_CLEANUP_V1` receiptでroot/child PID、CDP port、profile lockの解放を確認する。cleanup失敗は検証結果と分離して記録し、成功扱いに隠さない。
+- preflight/UI verification開始前はmanaged temp rootだけをorphan scanする。live parent、fresh heartbeat、current runは保護し、1時間/24時間の経過時間だけを理由に終了しない。
 - ローカル運用シミュレーションは `tools/run-local-ops-simulation.ps1` をオンデマンドで実行する。`-Mode Core` は日常的な高速経路として推奨されるが、引数省略時の既定は後方互換のため `-Mode Full` のままとする（`Core`を既定と呼ばない）。`Full`は自己クリーンアップする一時的な合成Scheduled Taskを作成する場合がある。両モードとも実Claude・GitHub書き込み・mergeは使わない。
 
 ## Anti-Loop
@@ -325,3 +388,9 @@ PRの最終監査結果は、PRのConversationへ`[AI_HANDOFF]`で始まるコ�
 ## Stop Conditions（要約）
 
 想定外差分、NG、UNKNOWN、要件矛盾、security/privacy/data-loss risk、LOOP DETECTED、人間にしかできない価値判断、未承認の人間価値/責任選択、または有効なmerge承認が存在しない状態。承認後のHEAD変更そのものは停止・再承認理由ではなく、最新HEAD再監査と`merge-authorization-gate`判定のトリガーとする。詳細は「Human Confirmation Points」および各`learnings/L-000X.md`を参照する。
+
+### Design approval scope / canonical promotion
+
+Design adoption and canonicalization are separate. `OK`, `採用`, `これで進めて` and similar short acknowledgements authorize only the smallest explicit current scope; they never create whole-screen or canonical-promotion authority. Projects opt in with `approval-scope-gate` and `canonical-promotion-gate` in Canonical Contract `requiredValidation`.
+
+The approval-scope gate validates Human Decision Sync designApproval evidence using closed COMPONENT / SECTION / SCREEN / WHOLE_APP scopes. The canonical-promotion gate requires exact SCREEN/WHOLE_APP final approval plus separate canonical-promotion approval, full WIP -> LOCKED_COMPONENTS -> FINAL_CANDIDATE -> HUMAN_APPROVED -> CANONICAL history, fixed DESIGN_REFERENCE/content SHA-256 identity, approved Git head, unchanged post-approval content, and no newer explicit human correction that demotes the design. It reuses existing decision/contract sources of truth; no parallel approval database or resident service is introduced.

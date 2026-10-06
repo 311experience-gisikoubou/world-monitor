@@ -138,6 +138,43 @@ for (const [field, value, reason] of evidenceFailures) {
 }
 
 {
+  // 'deep-research' must never be granted on capability-list presence alone.
+  const claimedWithoutEvidence = qualifyAdapters({
+    schemaVersion: 1,
+    adapters: [adapter({ capabilities: ['review', 'deep-research'] })],
+  });
+  assert(claimedWithoutEvidence.result === 'STOP' && claimedWithoutEvidence.code === 'SCHEMA_INVALID',
+    'deep-research capability without deepResearchEvidence must stop closed');
+
+  const claimedFalse = qualifyAdapters({
+    schemaVersion: 1,
+    adapters: [adapter({
+      capabilities: ['review', 'deep-research'],
+      evidence: evidence({ deepResearchEvidence: { independentMultiSourceVerified: false, justification: 'Not actually verified yet.' } }),
+    })],
+  });
+  assert(claimedFalse.result === 'NO_QUALIFIED_ADAPTER', 'an honest false deepResearchEvidence must never qualify for deep-research');
+  assert(claimedFalse.decisions[0].reasons.includes('DEEP_RESEARCH_NOT_ACTUALLY_QUALIFIED'), 'reason must name the unmet deep-research requirement');
+
+  const genuinelyQualified = qualifyAdapters({
+    schemaVersion: 1,
+    adapters: [adapter({
+      capabilities: ['review', 'deep-research'],
+      evidence: evidence({ deepResearchEvidence: { independentMultiSourceVerified: true, justification: 'Performs independent multi-source cross-checked research.' } }),
+    })],
+  });
+  assert(genuinelyQualified.result === 'QUALIFIED' && genuinelyQualified.qualifiedRoutes[0].capabilities.includes('deep-research'),
+    'genuinely qualified deep-research evidence must qualify');
+
+  const unexpectedField = qualifyAdapters({
+    schemaVersion: 1,
+    adapters: [adapter({ evidence: evidence({ deepResearchEvidence: { independentMultiSourceVerified: true, justification: 'x' } }) })],
+  });
+  assert(unexpectedField.result === 'STOP' && unexpectedField.code === 'SCHEMA_INVALID',
+    'deepResearchEvidence without the deep-research capability must stop closed, not silently ignored');
+}
+
+{
   assert(validateAdapter(adapter()).length === 0, 'valid adapter fixture expected');
   const source = fs.readFileSync(gatePath, 'utf8');
   assert(!source.includes("node:child_process"), 'qualification gate must not invoke provider processes');
