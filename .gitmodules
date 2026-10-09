@@ -1,0 +1,4 @@
+[submodule "official"]
+	path = official
+	url = https://github.com/koala73/worldmonitor.git
+	branch = main
