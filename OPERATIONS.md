@@ -170,8 +170,7 @@ The staged checks are executed through `.agents/skills/test-gate/staged-reality-
 - test-gate後に実装差分を変更した場合、そのtest-gateは無効となるため、必要な検証を再実行する。
 - exact committed HEADでtest-gateが完了した場合は、`VERIFICATION_EVIDENCE_V1`を単一のverification証拠として後段へ引き継ぐ。`final-pr-audit`やpost-mergeは現在のbase/head/scopeとの一致を機械確認し、同じpropertyのテスト・結果取得を繰り返さない。不一致時も無関係なPASSまで全再実行せず、無効化されたpropertyだけを再検証する。
 - Foundation更新を複数application repositoryへ展開する場合は、old/new Foundation差分を1回だけ固定し、`foundation-batch-rollout-plan`でexact blob identityから`CURRENT / UPDATE / PARTIAL_RESUME`を判定する。`CURRENT`なrepositoryにはbranch・書込み・rollout PRを作らず、更新が必要なrepositoryだけを既存のfail-closed update経路へ送る。各applicationのmerge承認は統合せずrepositoryごとに保持する。
-- 複数projectの全体状況確認は`portfolio-health-observer`で既存のWIP・stagnation・Foundation判定を集約する。横断observerはread-onlyとし、新しい優先順位判定・安全閾値・merge権限・常駐serviceを作らない。Issue #280 Phase 1の`improvement-followup`（source-only・非ネットワークの改善候補識別・重複排除・evidence保全）は、この既存observerへopt-inのrepository単位fieldとして接続する。同じ`improvement-followup.mjs`のIssue #280 Phase 2は、HUMAN承認済みのactive task識別（source project/repository/Issue/branch/worktree/job/HEADを厳密に分離）と live Project Root/owner snapshotから、改善候補を`IN_SCOPE`/`CROSS_PROJECT`/`NEW_SCOPE`/`UNKNOWN`へ分類し、cross-project発見がactive task・current branch・current repositoryのファイルを変更しないことを強制する。対象はCROSS_PROJECTおよび関連するIN_SCOPE技術bugfixのみで、既存Issueへのappendか新規Issue作成かをdedup keyで判定し、7項目の実行可能instruction（検証済み/未検証の原因・証拠、望む結果、owner/target repo/許可パス、禁止パス/権限、再現/testコマンド、独立audit/Draft PR、未認証runner主張をUNKNOWNとして保つexecutor欄）を生成する。NEW_SCOPEはproposal-only（source変更なし）、UNKNOWN・保護データ・stale evidenceはその候補だけをblockし安全なmain taskは継続する。出力状態は`PLAN_READY`/`NOT_STARTED`/`UNKNOWN`のみであり、planだけを理由に`POSTED`/`RUNNING`/`DONE`を主張しない。cross-repo Issue POSTやprovider auto-startは別途research/security gate後まで、このPhase 2でも対象外のまま。
-
+- 複数projectの全体状況確認は`portfolio-health-observer`で既存のWIP・stagnation・Foundation判定を集約する。横断observerはread-onlyとし、新しい優先順位判定・安全閾値・merge権限・常駐serviceを作らない。
 - commit前に変更ファイル・意図しない差分・migration・dependency manifest・lock file・秘密情報・実データ・一時ファイルを確認する。
 - pushは通常pushのみを使用する。force pushは禁止する。
 - PR作成後はlocal情報だけで判断せず、GitHub側からbase/head/head SHA/commit数/changed files/PR state/mergeable/CI/review状況を取得する。
@@ -207,8 +206,6 @@ The staged checks are executed through `.agents/skills/test-gate/staged-reality-
 
 ## Safe Continuous Workflow
 
-**既定はノーストップでマージ手前まで。** 人間が承認した目的・scopeについて、preflightから実装・必要なテスト・独立監査・通常push・Draft PR・exact HEADでのfinal-pr-auditまで、可能な安全な工程を人間への細かな進捗報告や再開指示なしで連続実行する。通常の技術的問題はAIが原因調査・修正・安全に認定された経路の再選択・必要最小限の再検証で処理する。途中の使用上限・接続切れ・テスト失敗・再試行・認定済みwriter不在は、それ自体を重大報告や人間の技術判断依頼にしない。
-
 承認された作業範囲について、以下の定型工程は、工程ごとに人間へ「進めてよいか」を確認せず連続実行してよい。
 
 ```
@@ -225,7 +222,6 @@ Context / Authority Check → preflight-audit（Canonical Contract Gate含む）
 - 必要なテストと監査を省略しない（`test-gate`・`final-pr-audit`参照）。
 - 読み取り専用の監査を依頼された場合は、ファイルを変更しない。
 - Squash and mergeの後は、マージ結果の検証を行う（`post-merge-verification`スキル参照）。
-- **マージ完了報告では次に必要な作業を必ず1件提案する。** `post-merge-verification`でGitHubの最新Issue/PR・現在のProject Root・依存関係・既存承認範囲を確認し、実際に必要な次工程を優先度順で1件選び、理由・根拠となるIssue/PR・AIまたは人間の次の担当を簡潔に示す。必須作業がない場合は、確認範囲とともに`次の必須作業なし`と明記する。状態未確認なら推測で作業を捏造せず`確認できず`と記す。新しいscopeは提案のみ、同一承認scopeの安全な作業はノーストップ継続、別PRのマージは個別の明示承認を維持。
 - merge実行には人間の明示承認が必要だが、同一承認範囲内で既に有効なmerge承認がある場合は、HEAD変更後の再監査PASSと`merge-authorization-gate=PERSIST`をもって再承認なしで継続する。
 - ユーザー向けのcheckpoint/status/final reportは、先頭で次アクションを1つに固定する：`【次のアクション：マージ】` / `【次のアクション：確認後に次へ】` / `【次のアクション：AIが自動継続】` / `【状態：完了】`。2行目は必ず`あなたの操作：...`とする。
 - `マージ`は「必要gateが完了し、merge承認だけが唯一の残りHuman Confirmation Point」の場合だけ。`確認後に次へ`は仕様・価値判断・主観的実機確認等のHuman Confirmation Pointが残る場合だけ。安全な技術作業や再監査が残るだけなら`AIが自動継続`とし、ユーザーへ「次」と言わせるために停止しない。
@@ -236,17 +232,16 @@ Context / Authority Check → preflight-audit（Canonical Contract Gate含む）
 ### PR Communication Flow
 
 - PR作業を開始する時点で、ユーザーへPRの目的を1文で先に示す。実装手段やファイル名より「何のための変更か」を優先する。
-- 目的提示後からpre-merge checkpointまでは、通常の工程進捗・実行経路変更・テスト中・監査中・rebase中・AI使用上限・接続切れ等を逐次報告せず、AIが可能な安全な作業を自動継続する。中間の「進めて」を求めるために止まらない。
-- **途中で人間へ確認・重大報告するのは次の3分類だけ**：(1) **費用**：追加課金・従量課金・自動credit購入・新たな有料契約等の可能性があり、既存の追加費用0円条件内で安全に回避できない場合、(2) **危険**：データ消失・機密/患者情報のアクセス拡大や外部送信・本番停止/破壊・重大なセキュリティ/権限変更・取り消しにくい操作・承認済み境界からの逸脱の恐れがある場合、(3) **人間の価値判断**：目的・承認scope・UI/業務仕様・日常運用・人間の責任範囲・優先する価値を実質的に変更する新たな判断が不可欠な場合。危険な行為・追加費用・価値判断を勝手に実行しない。
-- **重大報告の視覚表示**：既存の上記3分類により本当に途中の人間判断が必要な場合だけ、チャット等の色表示対応UIでは**赤系の小さな警告バッジ「重大・要判断」**を1つ表示する。色表示に対応しないGitHub/Markdown/通知では`🔴【重大・要判断】`を代用する。続けて`止める理由／安全に代行できない理由／人間に必要な判断（1件）`を短く示す。色や絵文字のみで意味を伝えず、文字を必ず併記する。通常の技術障害・プロバイダ待機・進捗では赤系表示や「重大」を使わず、可能な安全作業を継続する。マージ承認だけが残る場合は`【次のアクション：マージ】`をそのまま使い、重大事故と混同させない。この表示規約は既存のhuman-gate判定の表示層だけを変え、停止条件・権限・通知頻度・merge承認を追加または緩和しない。
-- AI側で解決できる通常のgate/test/Git/provider/connector失敗・待機は重大報告扱いにしない。既存のwork-state/Issue/runnerへ客観的な状態・原因・再開条件を保存し、許可済み経路で続行する。認定writerが使えない、他の安全な経路もない場合はSTOP/WAITを正しく維持し、未実装なのに進行中・マージ可能と宣言しない。既存の明示的な再開機構がないのに無期限バックグラウンド稼働を約束しない。技術的にこれ以上実行できない終端時は、途中報告ではなく作業結果として一度だけ未達をまとめる。
-- merge承認を求める直前のpre-merge checkpointでは、`目的`、`変更点`、`検証済み結果`、`経過中の問題と対処（必要なもののみ）`、`残る注意点`、`exact PR/HEAD`だけを短く一度で示す。過剰な工程ログ・途中経過・重複報告は出さない。
+- 目的提示後からpre-merge checkpointまでは、Human Confirmation Pointや重大な安全/仕様問題がない限り、通常の工程進捗を逐次報告せずAIが自動継続する。テスト中、監査中、rebase中等の状態説明だけを理由に停止しない。
+- 途中報告を行うのは、承認scope・仕様・安全境界・リスク境界を変える必要が出た場合、想定外差分、AI側で安全な復旧経路が尽きたgate failure、データ/費用/本番/破壊的操作等の重大事項で人間判断が必要な場合に限定する。安全に自動復旧できるtest/Git/tool/connector失敗は、原因調査・修正・経路再選択・再試行へ戻し、進捗報告だけで通常フローを終了しない。
+- **重大報告の視覚表示（Foundation PR #306 の限定適用）**：安全にAIが代行できない追加費用・機密情報やデータ消失などの危険・人間の本質的な仕様や価値判断が発生し、人間の判断が本当に必要な場合だけ、色対応チャットでは赤系の小さな「重大・要判断」バッジを1つ使い、色非対応のGitHub/Markdown/通知では`🔴【重大・要判断】`と明記する。どちらも停止理由・代行できない理由・人間の判断1件を短く文字で説明する。通常の技術的エラー・待機・進捗を重大扱いせず、既存ルールに沿って安全に作業を継続する。マージ承認待ちは重大事故と混同せず、既存の`【次のアクション：マージ】`で示す。この表示規約は安全停止条件・権限・通知頻度・マージ承認を追加も緩和もしない。
+- merge承認を求める直前のpre-merge checkpointでは、`目的`、`決まったこと・変更点`、`確認結果`、`注意点（なければなし）`だけを短く示す。長い工程ログ、全テスト名、途中経過は繰り返さない。
 - pre-merge checkpointの直後にだけ`【次のアクション：マージ】`と`あなたの操作：「マージして」と返信`を出す。merge承認以外のHuman Confirmation Pointが残る場合は先に`確認後に次へ`で解消し、merge表示を混在させない。
 
 ## Stateful Stagnation Enforcement
 
 Multi-step / long-running work must not remain in report-only mode while safe unfinished work remains. At task start and at status/checkpoint events, use the `preflight-audit` `stagnation-watch.mjs` gate (or an equivalent machine-readable invocation). It keeps a persistent work fingerprint and elapsed checkpoint state, escalates unchanged work from root-cause analysis to Forced Reflection to route hard-stop, and treats missed intervals as due checkpoints on the next invocation. A user status question does not itself create a human gate. If work is incomplete and no genuine human confirmation point exists, reporting status and stopping is not an allowed terminal action. Genuine merge, production, destructive, cost/data/workflow/ownership, and subjective real-device gates remain unchanged.
-Before a progress/status response ends the turn, invoke the same gate with `--response-intent terminate`. The only allowed terminal states are `PRE_MERGE_READY`, genuine `HUMAN_CONFIRMATION_REQUIRED`, `COMPLETE`, and safe-AI-route-exhausted `BLOCKED`; `AI_CONTINUES` is rejected. A valid turn-ending response also requires the fresh non-null `turnCloseReceipt` returned by that exact invocation; without it, termination has no machine evidence. For `--human-gate-kind subjective-real-device`, the same terminal invocation must also include `--human-visual-review-state-id <exact-state-id>` and `--human-visual-review-receipt-file <HUMAN_VISUAL_REVIEW_READY_V1.json>`; `stagnation-watch` reuses the existing human visual receipt verifier and keeps the handoff AI-owned when the receipt is missing, invalid, stale, or bound to another state.
+Before a progress/status response ends the turn, invoke the same gate with `--response-intent terminate`. The only allowed terminal states are `PRE_MERGE_READY`, genuine `HUMAN_CONFIRMATION_REQUIRED`, `COMPLETE`, and safe-AI-route-exhausted `BLOCKED`; `AI_CONTINUES` is rejected. A valid turn-ending response also requires the fresh non-null `turnCloseReceipt` returned by that exact invocation; without it, termination has no machine evidence.
 If the platform itself forces the turn to end, use `--response-intent platform-turn-boundary`. Persist the exact resumable checkpoint plus `resumeCheckpointReceipt`, and resume from it on the next turn only when checkpoint integrity and exact branch/HEAD still match. A stale or invalid checkpoint stops for state re-evaluation rather than silently resuming. The gate still exits nonzero with `responseMayTerminate=false`, so a caller cannot use this flag to authorize a voluntary progress-only terminal response; the actual platform cutoff is the only exception. This remains AI-owned and does not create a human confirmation point.
 
 The foundation does not require an always-on hourly GitHub Actions schedule in every application repository. Scheduling is an execution mechanism; the enforcement source is the stateful gate, so projects can use an already-available scheduler without creating unnecessary recurring runner cost or another service dependency.
@@ -325,16 +320,6 @@ Verification placement follows property equivalence: deterministic source checks
 
 承認済み操作の実行経路が利用不能になった場合の扱いは、一般原則を`learnings/L-0012.md`、GitHub連携における具体例を`learnings/L-0010.md`で扱う。ここでは複製しない。
 
-### Claude unavailable: continue independent authorized work
-
-2026-10-11の人間方針：「Claudeが止まっても、Claude不要の作業は止めない」。これは**プロジェクト全体の停止解除**であり、Claudeの代役writer認定、既存ジョブの強制再開、merge権限、本番切替の追加承認ではない。`WAIT_PROVIDER`は原則**そのジョブ単位**で保持し、別の独立タスクまで一括WAITにしない。
-
-- **ジョブ単位に仕分ける**：まず現在のProject Root/対象Repo/Issue/PR/job/branch/worktree/HEADと既存のState/Issueラベルを取り直し、(a) Claude実行を要し、代替の認定済みsource writerがないものは`WAIT_PROVIDER`のまま保全、(b) Claude不要で既存の安全な承認経路があるものは`CONTINUE_INDEPENDENT`、(c) owner・安全境界・現行HEAD・作業中writerが不明なら`STOP_UNKNOWN`とする。AIの都合で人間に技術判定を丸投げしない。
-- **先に進めてよい作業**：独立したread-only調査・観測、仕様とIssue/PRの照合、ローカルの無害な自己テストと監査、既存承認範囲のdocs-only Draft PR準備。ソース実装は既存`Research Gate`・`Instruction Clarity`・認定された実装route/例外・最終receiptを満たす作業だけ。作業可能であることと、自動source-writeを許可することを混同しない。
-- **待機中ジョブを守る**：初回容量停止時刻、元のjob ID、作業コピー、provider状態、必要なcontinuation証拠を消さず、別のIssueやPRへ読み替えない。停止中の同一ジョブを再キュー/複製/無断で別AIに引き継がない。元のPollerを切戻した隔離試験は自動再開を保証しない。復帰時には既存のowner/lease/クリーン状態と正規ゲートを確認して同じジョブを再開する。
-- **代替AIは資格を先に判定**：Codex/Gemini等のCLI検出やログイン確認だけでは実装資格を与えない。保護ファイルへのread分離、追加課金0円、権限/認証、実装receipt、競合防止の証拠がいずれか未確認ならsource-writeは`UNQUALIFIED`。別runner、別scheduler、別ルーティング正本は追加せず、provider選択はFoundation（#251）、Windows実行とleaseはLocalOpsに維持する。
-- **独立性・完了証拠**：進めたタスクは対象と許可scopeが独立していることを確認し、実行済みtest/PR監査結果だけをそのタスクへ記録する。`PLAN`/`QUEUED`/`WAIT_PROVIDER`を`RUNNING`/`DONE`と称さない。危険操作・新料金・protected data・PR mergeは既存Human Confirmation Pointのまま。
-
 ## Project Context / Handoff Root Protection
 
 ### Ordinary-turn implicit continuation
@@ -383,17 +368,6 @@ Project Contextを確定した後、local repository実行経路が使える場�
 このFoundation-only toolはGitHub Actionsを常駐させず、現在のauthenticated ownerのrepository inventoryを取得し、active repositoryのdefault branchに対してFoundation canonical blob identity、configured Claude wrappers、`PROJECT_CONTEXT.json`、ROOT/RELATED relationship、Human Decision Syncのvalid/configured状態、current turn-start guardを一括監査する。さらに`common-rule-health-audit.mjs`を自動実行し、共通ルールの`DECLARATION_ONLY`、実装/test欠落、未索引learning、Markdown肥大化・重複候補を同じ監査で可視化する。version記録だけではCURRENTと判定しない。
 
 GitHub inventory/tree/blob evidenceが取得不能・不完全・truncatedの場合、新規repositoryにFoundation/Project Contextが無い場合、Related Repoのroot identityが一致しない場合、またはcurrent turn-start guardが一致しない場合はSTOPする。archived/disabled repositoryはinventory countへ含めるがactive coverageから除外する。
-
-### Scope boundary and writer-lease gates（Issue #283）
-
-AIがGitHubのIssue/PR/commentを新規作成する前、または既存のIssue/PR/jobに対して書き込む前は、以下の既存evaluation-onlyゲートを使い、人間の依頼を忠実に実装しつつprojectやscopeを無断で広げず、既に収集済みのwriter claim証拠（人間とAI・複数AI間を含む）を評価する。いずれもGitHub呼び出し・プロセス起動停止・merge実行そのものは行わない読み取り専用の判定であり、詳細な入出力はここでは複製せず正本を参照する。
-
-- Issue/PR/commentの新規作成前は `.agents/skills/preflight-audit/scope-boundary-gate.mjs` を通し、`IN_SCOPE`/`CROSS_PROJECT`/`NEW_SCOPE`/`UNKNOWN` を明示する。`CROSS_PROJECT`/`NEW_SCOPE` は、既に記録された人間の明示承認（`explicitHumanScopeApproval`+`humanApprovalDecisionId`）がない限り作成をブロックする。
-- active Projectの身元と、対象Issue/PR/job/branch/HEADの一致は `.agents/skills/handoff/project-context-guard.mjs --verify-binding` で確認し、最近の作業量や直近のrepositoryから推測しない。
-- 同一repo+PR/Issueに関する既収集のwriter claim証拠は `.agents/skills/preflight-audit/writer-lease-guard.mjs` で評価する。2件以上の有効なwriterが同時に観測された場合は常にfail-closedで停止し、別writerが既にleaseを保持している場合は明示的な人間承認付きoverrideがない限りブロックする。PID_LEASE証拠は呼び出し元が再確認した`live`を年齢(TTL)に優先するground truthとして扱い、生存中のプロセスが経過時間だけでownershipを失うことはない。test結果がFAIL/UNKNOWN/COVERAGE_UNKNOWN、またはbranch不一致の間は、このゲートのadvisoryな`canMerge`もfalseのままとし、既存のmerge承認経路はこれを弱めない。
-- **正直な限界:** `writer-lease-guard.mjs`は呼び出し元が渡した`claims`に対する純粋関数であり、共有・永続状態もclaim storeへのatomicな読み書きも持たない。別々のwriterIdが互いのclaimを知らずに`claims: []`で同時に呼び出せば、それぞれ正当に`LEASE_GRANTED_NEW_WRITER`を受け取る。これは本物の並行プロセス間の排他制御の証明ではない。現時点でlauncher・`implementation-orchestrator.mjs`・push/PR編集経路のいずれからも呼び出されておらず、本当にatomicな共有claim記録の仕組みも存在しないため、この能力は`COVERAGE_UNKNOWN`のままであり、3件すべてが完了/`MERGE_READY`であるとは主張しない。
-
-詳細な入出力schema・判定コード・self-testは `preflight-audit/SKILL.md`（Scope Boundary Gate / Writer Lease Guard）と `handoff/SKILL.md`（External Identity Binding）を正本とする。
 
 ## Local AI Handoff
 
