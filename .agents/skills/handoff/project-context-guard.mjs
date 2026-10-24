@@ -367,6 +367,93 @@ export function validateTurnContinuation(manifestInput, stateInput) {
   };
 }
 
+const JOB_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
+const HEAD_SHA_RE = /^[a-f0-9]{40}$/;
+const EXTERNAL_BINDING_KEYS = [
+  'schemaVersion', 'declaredProjectContextId', 'declaredContextFingerprint', 'declaredRepository',
+  'declaredIssueNumber', 'declaredPrNumber', 'declaredJobId', 'declaredBranch', 'declaredHeadSha',
+  'observedBranch', 'observedHeadSha',
+];
+function cleanNullablePositiveInt(value) {
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647) return { ok: false };
+  return { ok: true, value };
+}
+function cleanJobId(value) {
+  if (value === null) return { ok: true, value: null };
+  const text = cleanText(value, 200);
+  if (!text || !JOB_ID_RE.test(text)) return { ok: false };
+  return { ok: true, value: text };
+}
+function cleanBranchName(value) {
+  const text = cleanText(value, 250);
+  if (!text) return null;
+  if (text.startsWith('/') || text.endsWith('/') || text.endsWith('.lock') || text.includes('..') || text.includes('//') || text.includes('@{') || /[\s~^:?*\[\\]/.test(text)) return null;
+  return text;
+}
+
+// Part B (Issue #283): verify that an already-declared external identity
+// (Issue/PR/job repository, branch, HEAD) agrees with both the active
+// canonical Project Root manifest and an already-observed git branch/HEAD.
+// This function performs no Git/network access itself and never infers
+// identity from recent commit/PR activity volume; both the declared and the
+// observed values must be supplied explicitly by the caller (for example
+// from `observeProjectContextEvidence` or `work-state-report.mjs`).
+export function validateExternalIdentityBinding(manifestInput, bindingInput) {
+  const normalized = normalizeManifest(manifestInput);
+  if (normalized.error) return normalized.error;
+  const m = normalized.value;
+  if (m.repositoryRole !== 'ROOT') return stop('PROJECT_CONTEXT_CANONICAL_ROOT_REQUIRED', 'External identity binding must use the canonical PROJECT_CONTEXT.json from the active Project Root repository.');
+
+  if (!bindingInput || typeof bindingInput !== 'object' || Array.isArray(bindingInput)) return stop('EXTERNAL_IDENTITY_EVIDENCE_INVALID', 'External identity binding evidence must be a closed JSON object.');
+  const keys = Object.keys(bindingInput);
+  if (keys.length !== EXTERNAL_BINDING_KEYS.length || keys.some((key) => !EXTERNAL_BINDING_KEYS.includes(key))) {
+    return stop('EXTERNAL_IDENTITY_EVIDENCE_INVALID', 'External identity binding evidence must use exactly the closed schema v1 key set.');
+  }
+  if (bindingInput.schemaVersion !== 1) return stop('EXTERNAL_IDENTITY_SCHEMA_UNSUPPORTED', 'External identity binding evidence schemaVersion=1 is required.');
+
+  const declaredProjectContextId = cleanContextId(bindingInput.declaredProjectContextId);
+  const declaredContextFingerprint = cleanFingerprint(bindingInput.declaredContextFingerprint);
+  if (!declaredProjectContextId || !declaredContextFingerprint) return stop('EXTERNAL_IDENTITY_EVIDENCE_INVALID', 'declaredProjectContextId and declaredContextFingerprint are required.');
+  const declaredRepository = cleanRepo(bindingInput.declaredRepository);
+  if (!declaredRepository) return stop('EXTERNAL_IDENTITY_EVIDENCE_INVALID', 'declaredRepository must be a valid owner/repo identifier.');
+  const declaredIssueNumber = cleanNullablePositiveInt(bindingInput.declaredIssueNumber);
+  const declaredPrNumber = cleanNullablePositiveInt(bindingInput.declaredPrNumber);
+  const declaredJobId = cleanJobId(bindingInput.declaredJobId);
+  if (!declaredIssueNumber.ok || !declaredPrNumber.ok || !declaredJobId.ok) return stop('EXTERNAL_IDENTITY_EVIDENCE_INVALID', 'declaredIssueNumber, declaredPrNumber, and declaredJobId must each be null or a valid identifier.');
+  if (declaredIssueNumber.value === null && declaredPrNumber.value === null && declaredJobId.value === null) {
+    return stop('EXTERNAL_IDENTITY_TARGET_MISSING', 'At least one of declaredIssueNumber, declaredPrNumber, or declaredJobId is required.');
+  }
+  const declaredBranch = cleanBranchName(bindingInput.declaredBranch);
+  const observedBranch = cleanBranchName(bindingInput.observedBranch);
+  if (!declaredBranch || !observedBranch) return stop('EXTERNAL_IDENTITY_EVIDENCE_INVALID', 'declaredBranch and observedBranch must be valid non-empty branch names.');
+  const declaredHeadSha = cleanText(bindingInput.declaredHeadSha, 40);
+  const observedHeadSha = cleanText(bindingInput.observedHeadSha, 40);
+  if (!declaredHeadSha || !HEAD_SHA_RE.test(declaredHeadSha) || !observedHeadSha || !HEAD_SHA_RE.test(observedHeadSha)) {
+    return stop('EXTERNAL_IDENTITY_EVIDENCE_INVALID', 'declaredHeadSha and observedHeadSha must each be a 40-character lowercase hex SHA.');
+  }
+
+  const canonicalFingerprint = fingerprint(m);
+  if (declaredProjectContextId !== m.projectContextId || declaredContextFingerprint !== canonicalFingerprint) {
+    return stop('PROJECT_CONTEXT_TRANSITION_MISMATCH', 'Declared external identity conflicts with the active canonical Project Root manifest.');
+  }
+  if (declaredRepository !== m.rootRepo && declaredRepository !== m.thisRepo) {
+    return stop('EXTERNAL_IDENTITY_REPOSITORY_MISMATCH', 'Declared Issue/PR/job repository does not match the active Project Root or current repository.', { projectRootRepository: m.rootRepo, thisRepository: m.thisRepo, declaredRepository });
+  }
+  if (declaredBranch !== observedBranch) {
+    return stop('EXTERNAL_IDENTITY_BRANCH_MISMATCH', 'Declared branch does not match the independently observed current branch.', { declaredBranch, observedBranch });
+  }
+  if (declaredHeadSha !== observedHeadSha) {
+    return stop('EXTERNAL_IDENTITY_HEAD_MISMATCH', 'Declared HEAD does not match the independently observed current HEAD.', { declaredHeadSha, observedHeadSha });
+  }
+  return {
+    result: 'PROCEED', contextHealth: 'CLEAR', severity: 'NONE', code: 'EXTERNAL_IDENTITY_BOUND',
+    projectContextId: m.projectContextId, repository: declaredRepository,
+    issueNumber: declaredIssueNumber.value, prNumber: declaredPrNumber.value, jobId: declaredJobId.value,
+    branch: declaredBranch, headSha: declaredHeadSha,
+  };
+}
+
 export function renderHandoffSkeleton(manifestInput, stateInput) {
   const v = validateProjectContext(manifestInput, stateInput);
   if (v.result === 'STOP') return v;
@@ -468,8 +555,8 @@ function parseArgs(argv) {
   const valued = new Map(); const flags = new Set();
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    if (a === '--pretty' || a === '--render' || a === '--turn-start') { if (flags.has(a)) return { error: 'duplicate' }; flags.add(a); continue; }
-    if (!['--context-file', '--state-file', '--state-json', '--handoff-file'].includes(a) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) return { error: 'invalid' };
+    if (a === '--pretty' || a === '--render' || a === '--turn-start' || a === '--verify-binding') { if (flags.has(a)) return { error: 'duplicate' }; flags.add(a); continue; }
+    if (!['--context-file', '--state-file', '--state-json', '--handoff-file', '--binding-file', '--binding-json'].includes(a) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) return { error: 'invalid' };
     if (valued.has(a)) return { error: 'duplicate' };
     valued.set(a, argv[++i]);
   }
@@ -491,6 +578,16 @@ async function main() {
   if (repoEvidence.repository !== normalizedManifest.value.thisRepo) {
     const mismatch = stop('PROJECT_CONTEXT_REPOSITORY_DRIFT', 'PROJECT_CONTEXT.json thisRepository does not match the actual origin repository.', { expectedThisRepository: normalizedManifest.value.thisRepo, actualRepository: repoEvidence.repository });
     process.stdout.write(JSON.stringify(mismatch) + '\n'); process.exitCode = 2; return;
+  }
+  if (parsed.flags.has('--verify-binding')) {
+    if (parsed.flags.has('--render') || parsed.flags.has('--turn-start') || parsed.valued.has('--handoff-file') || parsed.valued.has('--state-file') || parsed.valued.has('--state-json')) {
+      process.stdout.write(`${JSON.stringify(stop('PROJECT_CONTEXT_ARGUMENT_INVALID', '--verify-binding cannot be combined with --render, --turn-start, --handoff-file, --state-file, or --state-json.'))}\n`); process.exitCode = 2; return;
+    }
+    const bindingFile = parsed.valued.get('--binding-file'); const bindingJson = parsed.valued.get('--binding-json');
+    if ((!bindingFile && !bindingJson) || (bindingFile && bindingJson)) { process.stdout.write(`${JSON.stringify(stop('PROJECT_CONTEXT_ARGUMENT_INVALID', 'Use exactly one of --binding-file or --binding-json.'))}\n`); process.exitCode = 2; return; }
+    let binding; try { binding = bindingFile ? await readStrictJsonFile(bindingFile) : parseJsonStrict(bindingJson); } catch { process.stdout.write(`${JSON.stringify(stop('EXTERNAL_IDENTITY_EVIDENCE_INVALID', 'External identity binding JSON is missing, ambiguous, or unreadable.'))}\n`); process.exitCode = 2; return; }
+    const result = validateExternalIdentityBinding(manifest, binding);
+    process.stdout.write(`${JSON.stringify(result, null, parsed.flags.has('--pretty') ? 2 : 0)}\n`); if (result.result === 'STOP') process.exitCode = 2; return;
   }
   if (parsed.flags.has('--turn-start')) {
     const observed = observeProjectContextEvidence(contextFile);

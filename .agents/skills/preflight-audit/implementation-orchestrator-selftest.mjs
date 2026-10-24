@@ -68,7 +68,7 @@ fs.writeFileSync(patchedOrchestratorPath, orchestratorSource, 'utf8');
 const { runImplementationOrchestration, validateOrchestrationTask } = await import(pathToFileURL(patchedOrchestratorPath).href);
 const { evaluateReceipt, verifyFinalReceipt } = await import(receipt_url);
 const { readHeadSha, computeChangeSetSha256 } = await import(patchedRunnerUrl);
-const { computeConstraintsDigest } = await import(researchGateUrl);
+const { computeConstraintsDigest, CHECKLIST_IDS, TRIGGER_KEYS, BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE } = await import(researchGateUrl);
 
 function minimalPassChecklist() {
   return ['safety', 'dataPreservation', 'existingOverlap'].map((id) => ({
@@ -109,6 +109,23 @@ function researchFor(taskId, overrides = {}) {
       checklist,
       humanTopConditions: [],
       deepResearch: null,
+    },
+    context: { proposalId: 'proposal-1', constraints, humanTopConditions: [] },
+  };
+}
+function trialResearchFor(taskId, overrides = {}) {
+  const repository = overrides.repository || { owner: 'acme', name: 'widgets' };
+  const scope = overrides.scope || ['src/**'];
+  const constraints = overrides.constraints || [];
+  return {
+    evidence: {
+      schemaVersion: 1,
+      evidenceBinding: { taskId, proposalId: 'proposal-1', repository, scope, constraints, constraintsDigestSha256: computeConstraintsDigest(constraints), assessedAtUtcMs: Date.now(), maxEvidenceAgeMs: 24 * 60 * 60 * 1000 },
+      triggers: Object.fromEntries(TRIGGER_KEYS.map((key) => [key, key === 'osBrowserCompatibility'])),
+      noTriggerAssessment: null,
+      checklist: CHECKLIST_IDS.map((id) => ({ id, status: id === 'browserCompatibility' ? 'UNKNOWN' : 'PASS', applicable: true, justification: `Trial evidence for ${id}.`, ...(id === 'browserCompatibility' ? {} : { primarySourceRef: 'https://example.invalid/evidence' }) })),
+      humanTopConditions: [],
+      deepResearch: { primary: { providerId: 'provider-a', researchSessionRef: 'research-session://primary/a', evidenceRef: 'research-note://primary' }, adversarial: { present: true, providerId: 'provider-b', researchSessionRef: 'research-session://adversarial/b', distinctFromPrimary: true, evidenceRef: 'research-note://adversarial' } },
     },
     context: { proposalId: 'proposal-1', constraints, humanTopConditions: [] },
   };
@@ -206,6 +223,10 @@ process.stdin.on('end', () => {
   assert(validateOrchestrationTask(basePayload).length === 0, 'valid orchestration payload rejected');
   assert(validateOrchestrationTask({ ...basePayload, forbiddenScope: ['src/protected-reference.ts'] }).length === 0, 'valid forbiddenScope must be accepted');
   assert(validateOrchestrationTask({ ...basePayload, forbiddenScope: ['src/*.ts'] }).includes('forbiddenScope_invalid'), 'unsupported forbiddenScope wildcard must fail closed');
+  assert(validateOrchestrationTask({ ...basePayload, dataClass: 'synthetic', trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE, research: trialResearchFor('orch-1') }).length === 0,
+    'exact bounded synthetic trial mode must be accepted by the orchestrator schema');
+  assert(validateOrchestrationTask({ ...basePayload, trialWriteMode: 'UNBOUNDED' }).includes('trialWriteMode_invalid'),
+    'unknown trial mode must be rejected by the orchestrator schema');
 
   // --- clarity negatives: material ambiguity / hidden assumption stop before Claude invocation ---
   const materialStop = runImplementationOrchestration({
@@ -255,6 +276,15 @@ process.stdin.on('end', () => {
   assert(researchFailStop.result === 'STOP' && researchFailStop.code === 'RESEARCH_GATE_BLOCKED',
     `a raw research-gate FAIL must STOP before the Claude probe is ever invoked: ${JSON.stringify(researchFailStop)}`);
   assert(!fs.existsSync(logPath), 'a research-gate block must never invoke the Claude probe/runner');
+
+  const trialNoModeStop = runImplementationOrchestration(payloadWithTaskId('orch-trial-no-mode', {
+    dataClass: 'synthetic', research: trialResearchFor('orch-trial-no-mode'),
+  }), { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
+  assert(trialNoModeStop.code === 'RESEARCH_GATE_BLOCKED', 'TRIAL_REQUIRED without mode must block before probe');
+  const trialPublicStop = runImplementationOrchestration(payloadWithTaskId('orch-trial-public', {
+    dataClass: 'public', trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE, research: trialResearchFor('orch-trial-public'),
+  }), { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
+  assert(trialPublicStop.code === 'RESEARCH_GATE_BLOCKED', 'trial mode with public data must block before probe');
 
   // Omitting the research envelope entirely must fail schema-closed, never silently bypass the orchestrator.
   const { research: _omittedResearch, ...payloadWithoutResearch } = payloadWithTaskId('orch-research-missing');
@@ -394,6 +424,148 @@ process.stdin.on('end', () => {
   const records = fs.readFileSync(logPath, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
   const runRecords = records.filter((r) => r.phase === 'run');
   assert(runRecords.length === 3, `fake Claude must run exactly for the golden path, protected-scope negative, and out-of-scope negative: ${runRecords.length}`);
+
+  // === SYNTHETIC CLI entrypath check (NOT a real-provider E2E A/B/C test) ===
+  // Proves the actual `main()` CLI execution/exit path -- not just the
+  // exported `runImplementationOrchestration` function used above -- really
+  // invokes the EXISTING stagnation-watch.mjs as a real child process bound
+  // to a synthesized temporary repository's actual branch/HEAD, using only a
+  // fake stand-in Claude provider. Never touches a real provider, real repo,
+  // or real network.
+  const cliRepoDir = path.join(tempRoot, 'repo-cli-entrypath');
+  fs.mkdirSync(cliRepoDir, { recursive: true });
+  git(cliRepoDir, ['init', '-q']);
+  git(cliRepoDir, ['config', 'user.email', 'test@example.invalid']);
+  git(cliRepoDir, ['config', 'user.name', 'Test']);
+  git(cliRepoDir, ['remote', 'add', 'origin', 'https://github.com/acme/widgets.git']);
+  fs.mkdirSync(path.join(cliRepoDir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(cliRepoDir, 'src', 'widget.ts'), 'export const widget = 1;\n', 'utf8');
+  git(cliRepoDir, ['add', '.']);
+  git(cliRepoDir, ['commit', '-q', '-m', 'init']);
+  git(cliRepoDir, ['branch', '-m', 'main']);
+  git(cliRepoDir, ['checkout', '-q', '-b', 'feat/widget']);
+
+  const cliLogPath = path.join(tempRoot, 'fake-cli-entrypath-log.jsonl');
+  const cliFakeCli = path.join(tempRoot, 'fake-claude-cli-entrypath.mjs');
+  fs.writeFileSync(cliFakeCli, fakeSource.replace(JSON.stringify(logPath), JSON.stringify(cliLogPath)), 'utf8');
+
+  // A fake, provider-neutral stand-in for `resolveProviderCommand('claude')`
+  // itself -- the one piece of the real orchestrator that would otherwise
+  // probe a real locally-installed Claude CLI when invoked as a genuine CLI
+  // subprocess (main() calls it with no desc/envSource override, unlike the
+  // in-process calls above). This guarantees the CLI-entrypath check below
+  // can never reach a real external provider regardless of what is or is not
+  // actually installed on the machine running this selftest.
+  const fakeResolverSource = `export function resolveProviderCommand(kind) {
+  if (kind !== 'claude') return null;
+  return { file: ${JSON.stringify(process.execPath)}, prefix: [${JSON.stringify(cliFakeCli)}, 'ok'] };
+}
+`;
+  const fakeResolverPath = path.join(tempRoot, 'fake-ai-provider-inventory-for-cli.mjs');
+  fs.writeFileSync(fakeResolverPath, fakeResolverSource, 'utf8');
+  const fakeResolverUrl = pathToFileURL(fakeResolverPath).href;
+
+  let cliOrchestratorSource = fs.readFileSync(orchestratorPath, 'utf8');
+  cliOrchestratorSource = cliOrchestratorSource
+    .replace("from './ai-provider-inventory.mjs';", `from '${fakeResolverUrl}';`)
+    .replace("from './ai-task-router.mjs';", `from '${ai_task_router_url}';`)
+    .replace("from './implementation-route-receipt.mjs';", `from '${receipt_url}';`)
+    .replace("from './instruction-clarity-gate.mjs';", `from '${clarity_url}';`)
+    .replace("from './research-gate.mjs';", `from '${researchGateUrl}';`)
+    .replace("from './implementation-runner.mjs';", `from '${patchedRunnerUrl}';`)
+    // Point the production stagnation-watch path resolution at the real,
+    // completely unmodified stagnation-watch.mjs (this copy of the
+    // orchestrator source otherwise lives under a temp directory where no
+    // sibling stagnation-watch.mjs exists).
+    .replace('path.dirname(fileURLToPath(import.meta.url))', JSON.stringify(orchestratorDir));
+  assert(cliOrchestratorSource.includes(JSON.stringify(orchestratorDir)), 'stagnation-watch path patch must have applied');
+  const cliOrchestratorPath = path.join(tempRoot, 'implementation-orchestrator-cli-entrypath-under-test.mjs');
+  fs.writeFileSync(cliOrchestratorPath, cliOrchestratorSource, 'utf8');
+
+  const cliTaskId = 'orch-cli-entrypath';
+  const cliPayload = {
+    schemaVersion: 1,
+    taskId: cliTaskId,
+    kind: 'implementation',
+    objective: 'Bump the widget constant via the real CLI entrypath.',
+    prompt: 'Update src/widget.ts to change widget from 1 to 2, and add a helper file.',
+    repoRoot: cliRepoDir,
+    branch: 'feat/widget',
+    allowedScope: ['src/**'],
+    dataClass: 'source-only',
+    repository: { owner: 'acme', name: 'widgets' },
+    instructionClarity: {
+      schemaVersion: 1,
+      taskId: cliTaskId,
+      instructions: [{ id: 'human-1', kind: 'INSTRUCTION', summary: 'Update the bounded widget implementation.' }],
+      unlistedAssumptionsPresent: false,
+      ambiguities: [],
+    },
+    research: researchFor(cliTaskId, { repository: { owner: 'acme', name: 'widgets' }, scope: ['src/**'] }),
+  };
+
+  function runCli() {
+    const r = spawnSync(process.execPath, [cliOrchestratorPath, '--pretty'], {
+      input: JSON.stringify(cliPayload),
+      encoding: 'utf8',
+      env: cleanEnv,
+      cwd: cliRepoDir,
+    });
+    let parsed = null;
+    try { parsed = JSON.parse(r.stdout); } catch { /* leave null, asserted below */ }
+    return { status: r.status, parsed, stdout: r.stdout, stderr: r.stderr };
+  }
+
+  const cliFirst = runCli();
+  assert(cliFirst.status === 0, `expected CLI exit 0 on the first accepted-task run: ${cliFirst.status} ${cliFirst.stdout} ${cliFirst.stderr}`);
+  assert(cliFirst.parsed?.result === 'COMPLETED', `expected the real CLI entrypath to reach COMPLETED via the fake provider: ${JSON.stringify(cliFirst.parsed)}`);
+  const firstCheckpoint = cliFirst.parsed?.stagnationCheckpoint;
+  assert(firstCheckpoint?.ok === true, `expected the first real stagnation checkpoint to PROCEED: ${JSON.stringify(firstCheckpoint)}`);
+  assert(firstCheckpoint?.code === 'STAGNATION_BASELINE_CREATED', `expected a real baseline checkpoint, not a fabricated one: ${JSON.stringify(firstCheckpoint)}`);
+  assert(firstCheckpoint?.terminalState === 'AI_CONTINUES', `incomplete work must never be reported as a fake PRE_MERGE_READY terminal state: ${JSON.stringify(firstCheckpoint)}`);
+  assert(firstCheckpoint?.preMergeTechnicalReady === false, `the orchestrator must never assert fake PRE_MERGE_READY: ${JSON.stringify(firstCheckpoint)}`);
+  assert(firstCheckpoint?.turnCloseReceipt === null, `the orchestrator must never request/return a terminal close receipt: ${JSON.stringify(firstCheckpoint)}`);
+
+  // Prove the checkpoint state file is a REAL branch+HEAD-bound artifact
+  // written by the real stagnation-watch.mjs (not a mocked/forged result).
+  const cliStateGitPath = git(cliRepoDir, ['rev-parse', '--git-path', `ai-dev-foundation/stagnation/${cliTaskId}.json`]).trim();
+  const cliStateFile = path.join(cliRepoDir, cliStateGitPath);
+  assert(fs.existsSync(cliStateFile), 'the real stagnation-watch.mjs must have written a real checkpoint state file bound to this repo');
+  const cliState = JSON.parse(fs.readFileSync(cliStateFile, 'utf8'));
+  assert(cliState.schema === 'ai-stagnation-state-v1' && cliState.workId === cliTaskId,
+    `the persisted checkpoint must be the real stagnation-watch schema/workId: ${JSON.stringify(cliState)}`);
+  const cliHeadSha = git(cliRepoDir, ['rev-parse', 'HEAD']).trim();
+  assert(/^[0-9a-f]{40}$/.test(cliHeadSha), 'expected a real resolvable HEAD for the checkpoint binding');
+
+  // Simulate a genuinely-already-stagnant prior checkpoint (backdated,
+  // 2 prior unchanged checkpoints, same real fingerprint) so the next real
+  // invocation legitimately STOPs on repeated unchanged progress, without
+  // fabricating stagnation-watch's own internal result.
+  const backdated = {
+    ...cliState,
+    lastCheckpointAt: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
+    unchangedCheckpoints: 2,
+  };
+  fs.writeFileSync(cliStateFile, `${JSON.stringify(backdated, null, 2)}\n`, 'utf8');
+
+  // Restore only the temporary synthetic fixture files before replay.
+  // The fake provider recreates exactly the same changed-content fingerprint
+  // against the same HEAD; unlike a dirty source worktree, this allows the
+  // real qualified entrypath to run and the existing stagnation gate to
+  // detect repeated unchanged progress honestly.
+  git(cliRepoDir, ['checkout', '--', 'src/widget.ts']);
+  fs.rmSync(path.join(cliRepoDir, 'src', 'widget-helper.ts'), { force: true });
+
+  const cliSecond = runCli();
+  assert(cliSecond.parsed?.result === 'COMPLETED', `the Claude execution itself must still be reported honestly as COMPLETED: ${JSON.stringify(cliSecond.parsed)}`);
+  const secondCheckpoint = cliSecond.parsed?.stagnationCheckpoint;
+  assert(secondCheckpoint?.ok === false, `a real repeated-unchanged-progress checkpoint must fail, never be silently reported as a qualified successful end: ${JSON.stringify(secondCheckpoint)}`);
+  assert(secondCheckpoint?.code === 'STAGNATION_HARD_STOP_ROUTE_CHANGE_REQUIRED', `expected the real stagnation hard-stop code: ${JSON.stringify(secondCheckpoint)}`);
+  assert(secondCheckpoint?.handoffClass === 'AI_OWNED', `a technical stagnation hard-stop must never be mislabeled human-required: ${JSON.stringify(secondCheckpoint)}`);
+  assert(secondCheckpoint?.terminalState !== 'PRE_MERGE_READY', `must never assert fake PRE_MERGE_READY: ${JSON.stringify(secondCheckpoint)}`);
+  assert(secondCheckpoint?.preMergeTechnicalReady === false, `must never assert fake PRE_MERGE_READY: ${JSON.stringify(secondCheckpoint)}`);
+  assert(secondCheckpoint?.turnCloseReceipt === null, `must never request/return a terminal close receipt: ${JSON.stringify(secondCheckpoint)}`);
+  assert(cliSecond.status !== 0, `the CLI exit path must surface a failed checkpoint gate rather than silently reporting a qualified successful end: exit ${cliSecond.status}`);
 
   console.log('implementation-orchestrator selftest: PASS');
 } finally {

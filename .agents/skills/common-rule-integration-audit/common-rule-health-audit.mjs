@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { access, readFile, readdir } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { access, readFile, readdir, lstat, realpath } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { resolve, join, isAbsolute } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
@@ -41,8 +42,62 @@ function paras(text){
   const chunks=String(text).replaceAll('\r\n','\n').split(/\n\s*\n/u);
   return chunks.map(x=>x.replace(/\s+/gu,' ').trim()).filter(x=>x.length>=120&&!x.startsWith('#')&&!x.startsWith('```'));
 }
-export async function auditRuleHealth({root,contracts=CONTRACTS}={}){
+
+const FOUNDATION_REPO='311experience-gisikoubou/ai-dev-foundation';
+const FOUNDATION_REMOTE=/^(?:https:\/\/github\.com\/|git@github\.com:)311experience-gisikoubou\/ai-dev-foundation(?:\.git)?$/i;
+const GIT_SHA=/^[a-f0-9]{40}$/;
+
+function gitOutput(root,args){
+  const r=spawnSync('git',['-C',root,...args],{encoding:'utf8',windowsHide:true,timeout:10000,maxBuffer:1024*1024});
+  return r.error||r.status!==0 ? null : r.stdout.trim();
+}
+function samePath(a,b){
+  return process.platform==='win32'?resolve(a).toLowerCase()===resolve(b).toLowerCase():resolve(a)===resolve(b);
+}
+async function pinnedFoundationSource(foundationRoot,foundationHead){
+  if(typeof foundationRoot!=='string'||!isAbsolute(foundationRoot)||!GIT_SHA.test(foundationHead||''))
+    return fail('FOUNDATION_SOURCE_PIN_REQUIRED');
+  const base=resolve(foundationRoot);
+  let ctx,real;
+  try{
+    real=await realpath(base);
+    if(!samePath(base,real))return fail('FOUNDATION_SOURCE_LINKED_ROOT');
+    const p=join(base,'PROJECT_CONTEXT.json');
+    const projectStat=await lstat(p);
+    if(!projectStat.isFile()||projectStat.isSymbolicLink())return fail('FOUNDATION_SOURCE_CONTEXT_UNSAFE');
+    ctx=JSON.parse(await readFile(p,'utf8'));
+  }catch{return fail('FOUNDATION_SOURCE_CONTEXT_UNAVAILABLE');}
+  if(ctx?.thisRepository!==FOUNDATION_REPO||
+     ctx?.projectRootRepository!==FOUNDATION_REPO||
+     ctx?.repositoryRole!=='ROOT')return fail('FOUNDATION_SOURCE_REPOSITORY_MISMATCH');
+  const remote=gitOutput(base,['remote','get-url','origin']);
+  const top=gitOutput(base,['rev-parse','--show-toplevel']);
+  const head=gitOutput(base,['rev-parse','HEAD']);
+  if(!remote||!FOUNDATION_REMOTE.test(remote)||!top||!samePath(top,base)||
+     head!==foundationHead)return fail('FOUNDATION_SOURCE_GIT_IDENTITY_MISMATCH');
+  for(const file of ['PROJECT_CONTEXT.json','tools/portfolio-governance-audit.mjs']){
+    const full=join(base,file);
+    let stat;
+    try{stat=await lstat(full);if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||!samePath(await realpath(full),full))
+      return fail('FOUNDATION_SOURCE_FILE_UNSAFE',{file});}
+    catch{return fail('FOUNDATION_SOURCE_FILE_MISSING',{file});}
+    if(gitOutput(base,['ls-files','--error-unmatch','--',file])!==file)
+      return fail('FOUNDATION_SOURCE_UNTRACKED',{file});
+  }
+  // Both staged AND worktree changes to the external central contract fail closed.
+  const dirty=gitOutput(base,['status','--porcelain=v1','--','PROJECT_CONTEXT.json','tools/portfolio-governance-audit.mjs']);
+  if(dirty===null||dirty!=='')return fail('FOUNDATION_SOURCE_DIRTY');
+  return {ok:true,root:base,head};
+}
+
+const REVIEW_LONG_FILE_LINES=500;
+const STOP_LONG_FILE_LINES=800;
+export async function auditRuleHealth({root,contracts=CONTRACTS,foundationRoot=null,foundationHead=null}={}){
   const base=resolve(root??process.cwd());
+  if((foundationRoot===null)!==(foundationHead===null))return fail('FOUNDATION_SOURCE_PIN_REQUIRED');
+  const external=foundationRoot===null?null:await pinnedFoundationSource(foundationRoot,foundationHead);
+  if(external&&!external.ok)return external;
+  if(external&&samePath(external.root,base))return fail('FOUNDATION_SOURCE_MUST_BE_SEPARATE');
   const rows=[];
   for(const c of contracts){
     const docsMissing=[],implementationMissing=[],testsMissing=[],activationMissing=[];
@@ -50,7 +105,7 @@ export async function auditRuleHealth({root,contracts=CONTRACTS}={}){
     for(const p of c.impl??[]) if(!await exists(join(base,p))) implementationMissing.push(p);
     for(const p of c.tests??[]) if(!await exists(join(base,p))) testsMissing.push(p);
     for(const evidence of c.activationEvidence??[]){
-      const path=join(base,evidence.path);
+      const path=join(external&&evidence.path==='tools/portfolio-governance-audit.mjs'?external.root:base,evidence.path);
       if(!await exists(path)){activationMissing.push({...evidence,reason:'FILE_MISSING'});continue;}
       const text=await readFile(path,'utf8');
       if(!text.includes(evidence.contains)) activationMissing.push({...evidence,reason:'MARKER_MISSING'});
@@ -74,7 +129,7 @@ export async function auditRuleHealth({root,contracts=CONTRACTS}={}){
   const files=await ruleMarkdown(base), stats=[], map=new Map(), deprecated=[];
   for(const f of files){
     const t=await readFile(join(base,f),'utf8'), lines=t.replaceAll('\r\n','\n').split('\n').length;
-    stats.push({file:f,lineCount:lines,long:lines>500});
+    stats.push({file:f,lineCount:lines,long:lines>REVIEW_LONG_FILE_LINES,hardLong:lines>STOP_LONG_FILE_LINES});
     const generated=/^\s*<!--\s*GENERATED\b/iu.test(t);
     if(!generated) for(const p of paras(t)){const k=p.toLowerCase();const a=map.get(k)??[];a.push(f);map.set(k,a);}
     if(/(?:^|\n)\s*(?:Status\s*:\s*(?:deprecated|obsolete)|#+\s*(?:Deprecated|Obsolete|蟒・ｭ｢蛟呵｣忿髱樊耳螂ｨ)\b)/iu.test(t)) deprecated.push(f);
@@ -89,12 +144,12 @@ export async function auditRuleHealth({root,contracts=CONTRACTS}={}){
   const unlisted=[];
   const sd=join(base,'.agents','skills');
   if(await exists(sd)) for(const e of await readdir(sd,{withFileTypes:true})) if(e.isDirectory()&&await exists(join(sd,e.name,'SKILL.md'))&&!readme.includes(e.name)) unlisted.push(e.name);
-  const declarationOnly=rows.filter(x=>x.state==='DECLARATION_ONLY'),missing=rows.filter(x=>x.state==='MISSING'),longFiles=stats.filter(x=>x.long);
+  const declarationOnly=rows.filter(x=>x.state==='DECLARATION_ONLY'),missing=rows.filter(x=>x.state==='MISSING'),longFiles=stats.filter(x=>x.long),hardLongFiles=stats.filter(x=>x.hardLong);
   const activationFailures=rows.filter(x=>x.activationMissing.length>0);
-  const ok=declarationOnly.length===0&&missing.length===0&&unindexed.length===0;
-  return {ok,code:ok?'COMMON_RULE_HEALTH_PASS':'COMMON_RULE_HEALTH_STOP',schemaVersion:1,totals:{contracts:rows.length,enforced:rows.filter(x=>x.state==='ENFORCED').length,operational:rows.filter(x=>x.state==='OPERATIONAL').length,declarationOnly:declarationOnly.length,missing:missing.length,activationFailures:activationFailures.length,markdownFiles:files.length,markdownLines:stats.reduce((n,x)=>n+x.lineCount,0),longFiles:longFiles.length,duplicateParagraphs:duplicates.length,unindexedLearnings:unindexed.length,unlistedSkills:unlisted.length},reviewRecommended:Boolean(declarationOnly.length||missing.length||longFiles.length||duplicates.length||unindexed.length||unlisted.length),contracts:rows,inventory:{longFiles,duplicateParagraphs:duplicates,unindexedLearnings:unindexed,unlistedSkills:unlisted,deprecatedCandidates:[...new Set(deprecated)].sort()},rule:'ENFORCED means implementation, test, and declared activation evidence were found inside the stated enforcementScope; it never implies universal browser auto-trigger. No automatic rule deletion or merge.'};
+  const ok=declarationOnly.length===0&&missing.length===0&&unindexed.length===0&&hardLongFiles.length===0&&duplicates.length===0;
+  return {ok,code:ok?'COMMON_RULE_HEALTH_PASS':'COMMON_RULE_HEALTH_STOP',schemaVersion:1,externalPortfolioSource:external?{repository:FOUNDATION_REPO,head:external.head,scope:'CENTRAL_SOURCE_MARKERS_ONLY',centralAuditExecuted:false}:null,limits:{reviewLongFileLines:REVIEW_LONG_FILE_LINES,stopLongFileLines:STOP_LONG_FILE_LINES},totals:{contracts:rows.length,enforced:rows.filter(x=>x.state==='ENFORCED').length,operational:rows.filter(x=>x.state==='OPERATIONAL').length,declarationOnly:declarationOnly.length,missing:missing.length,activationFailures:activationFailures.length,markdownFiles:files.length,markdownLines:stats.reduce((n,x)=>n+x.lineCount,0),longFiles:longFiles.length,hardLongFiles:hardLongFiles.length,duplicateParagraphs:duplicates.length,unindexedLearnings:unindexed.length,unlistedSkills:unlisted.length},reviewRecommended:Boolean(declarationOnly.length||missing.length||longFiles.length||duplicates.length||unindexed.length||unlisted.length),contracts:rows,inventory:{longFiles,hardLongFiles,duplicateParagraphs:duplicates,unindexedLearnings:unindexed,unlistedSkills:unlisted,deprecatedCandidates:[...new Set(deprecated)].sort()},rule:'ENFORCED means implementation, test, and declared activation evidence were found inside the stated enforcementScope; it never implies universal browser auto-trigger. No automatic rule deletion or merge. Files over '+REVIEW_LONG_FILE_LINES+' Markdown lines are review evidence; files over '+STOP_LONG_FILE_LINES+' Markdown lines or exact duplicated long rule paragraphs force STOP until split/consolidated.'};
 }
-function args(argv){let root=process.cwd(),pretty=false;for(let i=0;i<argv.length;i++){if(argv[i]==='--root'&&argv[i+1])root=argv[++i];else if(argv[i]==='--pretty')pretty=true;else return fail('ARGUMENT_INVALID');}return {ok:true,root:resolve(root),pretty};}
-async function main(){const a=args(process.argv.slice(2));if(!a.ok){console.log(JSON.stringify(a));process.exitCode=2;return;}try{const o=await auditRuleHealth({root:a.root});console.log(JSON.stringify(o,null,a.pretty?2:0));console.error('COMMON_RULE_HEALTH='+(o.ok?'PASS':'STOP')+' declarationOnly='+o.totals.declarationOnly+' markdownLines='+o.totals.markdownLines);if(!o.ok)process.exitCode=2;}catch(e){console.log(JSON.stringify(fail(e?.message||'COMMON_RULE_HEALTH_INTERNAL_ERROR')));process.exitCode=2;}}
+function args(argv){let root=process.cwd(),pretty=false,foundationRoot=null,foundationHead=null;for(let i=0;i<argv.length;i++){if(argv[i]==='--root'&&argv[i+1])root=argv[++i];else if(argv[i]==='--foundation-root'&&argv[i+1])foundationRoot=argv[++i];else if(argv[i]==='--foundation-head'&&argv[i+1])foundationHead=argv[++i];else if(argv[i]==='--pretty')pretty=true;else return fail('ARGUMENT_INVALID');}return {ok:true,root:resolve(root),pretty,foundationRoot,foundationHead};}
+async function main(){const a=args(process.argv.slice(2));if(!a.ok){console.log(JSON.stringify(a));process.exitCode=2;return;}try{const o=await auditRuleHealth({root:a.root,foundationRoot:a.foundationRoot,foundationHead:a.foundationHead});console.log(JSON.stringify(o,null,a.pretty?2:0));console.error('COMMON_RULE_HEALTH='+(o.ok?'PASS':'STOP')+' declarationOnly='+(o.totals?.declarationOnly??'unverified')+' markdownLines='+(o.totals?.markdownLines??'unverified'));if(!o.ok)process.exitCode=2;}catch(e){console.log(JSON.stringify(fail(e?.message||'COMMON_RULE_HEALTH_INTERNAL_ERROR')));process.exitCode=2;}}
 export { CONTRACTS };
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href) await main();

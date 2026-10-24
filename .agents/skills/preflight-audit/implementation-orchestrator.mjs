@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { resolveProviderCommand } from './ai-provider-inventory.mjs';
 import { routeTask } from './ai-task-router.mjs';
 import { evaluateReceipt, CHATGPT_DIRECT_GATED_KINDS as RECEIPT_RESEARCH_GATED_KINDS } from './implementation-route-receipt.mjs';
 import { evaluateInstructionClarity } from './instruction-clarity-gate.mjs';
 import {
-  evaluateResearchGateBound, blocksSourceWrite,
+  evaluateResearchGateBound, blocksSourceWrite, BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE,
   validateResearchEnvelopeShape, buildResearchExpectedBinding,
 } from './research-gate.mjs';
 import {
@@ -24,10 +25,17 @@ import {
 const SCHEMA_VERSION = 1;
 const EXECUTOR_ID = 'claude-implementation-write';
 const EXECUTION_ENVIRONMENT = 'local-cli-write';
+// Resolved next to this file so the real, unmodified stagnation-watch.mjs is
+// always what the CLI entrypath actually invokes (see runStagnationCheckpoint
+// below). Kept as a plain path expression -- not an ESM import -- because
+// stagnation-watch.mjs is a standalone script with unconditional top-level
+// execution (no exported functions to import safely); invoking it as a child
+// process reuses it exactly as-is without changing its own behavior/tests.
+const STAGNATION_WATCH_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'stagnation-watch.mjs');
 const ALLOWED_KEYS = new Set([
   'schemaVersion', 'taskId', 'kind', 'objective', 'prompt', 'repoRoot', 'branch',
   'allowedScope', 'forbiddenScope', 'doneConditions', 'requiredTests', 'dataClass', 'repository',
-  'instructionClarity', 'research',
+  'instructionClarity', 'research', 'trialWriteMode',
 ]);
 
 function safeToken(value) {
@@ -86,6 +94,9 @@ export function validateOrchestrationTask(payload) {
   if (!optionalStringArray(payload.doneConditions)) errors.push('doneConditions_invalid');
   if (!optionalStringArray(payload.requiredTests)) errors.push('requiredTests_invalid');
   if (!ALLOWED_DATA_CLASSES.has(payload.dataClass)) errors.push('dataClass_invalid');
+  if (payload.trialWriteMode !== undefined && payload.trialWriteMode !== BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE) {
+    errors.push('trialWriteMode_invalid');
+  }
   const repository = payload.repository;
   if (!repository || typeof repository !== 'object' || Array.isArray(repository)) {
     errors.push('repository_not_object');
@@ -180,7 +191,7 @@ export function runImplementationOrchestration(payload, {
     taskId: payload.taskId, repository: payload.repository, scope: payload.allowedScope,
   });
   const researchGate = evaluateResearchGateBound(payload.research.evidence, researchExpected);
-  if (blocksSourceWrite(researchGate)) {
+  if (blocksSourceWrite(researchGate, { trialWriteMode: payload.trialWriteMode, dataClass: payload.dataClass })) {
     return stop('RESEARCH_GATE_BLOCKED', { taskId, instructionClarity, researchGate });
   }
 
@@ -204,6 +215,7 @@ export function runImplementationOrchestration(payload, {
     branch: payload.branch,
     allowedScope: [...payload.allowedScope],
     dataClass: payload.dataClass,
+    ...(payload.trialWriteMode !== undefined ? { trialWriteMode: payload.trialWriteMode } : {}),
     costPolicy: 'no-new-cost',
     requestedAuthorities: [],
     instructionClarity: payload.instructionClarity,
@@ -233,6 +245,7 @@ export function runImplementationOrchestration(payload, {
     taskId: payload.taskId,
     capability: payload.kind,
     dataClass: payload.dataClass,
+    ...(payload.trialWriteMode !== undefined ? { trialWriteMode: payload.trialWriteMode } : {}),
     prompt: payload.prompt,
     repoRoot: payload.repoRoot,
     branch: payload.branch,
@@ -259,6 +272,56 @@ export function runImplementationOrchestration(payload, {
   };
 }
 
+// Invokes the EXISTING stagnation-watch.mjs (unmodified) as a real child
+// process, bound to the task's actual repository/branch/HEAD. This is the
+// CLI main() entrypath wiring: it never asserts a fake 'complete' work-state
+// or 'pre-merge' completion target on this orchestrator's own behalf (the
+// orchestrator only ever routes/executes one bounded Claude edit -- it is
+// never the authority on overall task completion or merge readiness), and it
+// never requests a terminal response-intent, so stagnation-watch can never be
+// asked to hand back a terminal-response close receipt here. On genuinely
+// repeated unchanged progress against the real branch/HEAD fingerprint it
+// already tracks, stagnation-watch can still legitimately STOP this
+// checkpoint; that failure is surfaced to the caller (never swallowed) and
+// is always AI-owned technical stagnation handling, never a human gate,
+// because this call only ever passes --human-gate none.
+export function runStagnationCheckpoint({ repoRoot, taskId }, orchestrationResult) {
+  const workflowStatus = orchestrationResult?.result === 'COMPLETED' ? 'passed' : 'failed';
+  const failureSignature = typeof orchestrationResult?.code === 'string' ? orchestrationResult.code : 'none';
+  const cliArgs = [
+    STAGNATION_WATCH_PATH,
+    '--target-root', repoRoot,
+    '--work-id', taskId,
+    '--gate-phase', 'implementation-orchestrator',
+    '--work-state', 'incomplete',
+    '--human-gate', 'none',
+    '--continuation-action', 'resume',
+    '--completion-target', 'none',
+    '--response-intent', 'continue',
+    '--ai-route-state', 'available',
+    '--workflow-status', workflowStatus,
+    '--failure-signature', failureSignature,
+  ];
+  const run = spawnSync(process.execPath, cliArgs, { encoding: 'utf8', timeout: 15000, windowsHide: true, maxBuffer: 1048576 });
+  let parsed = null;
+  try { parsed = JSON.parse(run.stdout || ''); } catch { parsed = null; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {
+      ok: false, result: 'STOP', code: 'STAGNATION_CHECKPOINT_OUTPUT_UNREADABLE',
+      terminalState: null, handoffClass: 'AI_OWNED', preMergeTechnicalReady: false, turnCloseReceipt: null,
+    };
+  }
+  return {
+    ok: run.status === 0 && parsed.result === 'PROCEED',
+    result: parsed.result ?? null,
+    code: parsed.code ?? null,
+    terminalState: parsed.terminalState ?? null,
+    handoffClass: parsed.handoffClass ?? null,
+    preMergeTechnicalReady: parsed.preMergeTechnicalReady === true,
+    turnCloseReceipt: parsed.turnCloseReceipt ?? null,
+  };
+}
+
 function parseArgs(argv) {
   let pretty = false;
   let timeoutMs;
@@ -280,8 +343,18 @@ async function main() {
     const raw = await readBoundedTaskInput(process.stdin);
     const payload = JSON.parse(raw);
     const result = runImplementationOrchestration(payload, args.timeoutMs ? { timeoutMs: args.timeoutMs } : {});
-    process.stdout.write(`${JSON.stringify(result, null, args.pretty ? 2 : 0)}\n`);
-    if (result.result !== 'COMPLETED') process.exitCode = 1;
+    // Only an accepted (schema-valid) task gets a real branch+HEAD stagnation
+    // checkpoint; a structurally invalid payload has no trustworthy
+    // repoRoot/branch to bind one to. This never substitutes for or alters
+    // `result` above -- it is strictly additional CLI-exit-path evidence.
+    const stagnationCheckpoint = validateOrchestrationTask(payload).length === 0
+      ? runStagnationCheckpoint({ repoRoot: payload.repoRoot, taskId: payload.taskId }, result)
+      : null;
+    const output = { ...result, stagnationCheckpoint };
+    process.stdout.write(`${JSON.stringify(output, null, args.pretty ? 2 : 0)}\n`);
+    if (result.result !== 'COMPLETED' || (stagnationCheckpoint && !stagnationCheckpoint.ok)) {
+      process.exitCode = 1;
+    }
   } catch (error) {
     const code = ['INPUT_TOO_LARGE', 'INPUT_TIMEOUT', 'INPUT_STREAM_ERROR'].includes(error?.code) ? error.code : 'INPUT_READ_OR_PARSE_FAILED';
     process.stdout.write(`${JSON.stringify(stop(code))}\n`); process.exitCode = 2;

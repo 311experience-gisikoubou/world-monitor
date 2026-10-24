@@ -91,6 +91,13 @@ assert(actionsCost.selectedTests.includes('actions-cost'), 'Actions cost guard s
 const portfolio = select(['.agents/skills/preflight-audit/portfolio-health-observer.mjs']);
 assert(portfolio.selection === 'IMPACT_SCOPED', 'portfolio observer should be impact scoped');
 assert(portfolio.selectedTests.includes('portfolio-health'), 'portfolio observer selftest missing');
+assert(portfolio.selectedTests.includes('improvement-followup'), 'portfolio observer change should also select improvement-followup (genuine selftest-level interoperability)');
+
+const improvementFollowup = select(['.agents/skills/preflight-audit/improvement-followup.mjs']);
+assert(improvementFollowup.selection === 'IMPACT_SCOPED', 'improvement-followup change should be impact scoped');
+for (const id of ['improvement-followup','portfolio-health']) {
+  assert(improvementFollowup.selectedTests.includes(id), `improvement-followup family missing ${id}`);
+}
 const turnWait = select(['.agents/skills/long-task-wait/turn-wait-budget.mjs']);
 assert(turnWait.selection === 'IMPACT_SCOPED', 'turn wait budget should be impact scoped');
 for (const id of ['long-task-wait','stagnation']) assert(turnWait.selectedTests.includes(id), `turn wait selection missing ${id}`);
@@ -247,7 +254,7 @@ const highCoupling = select(['.agents/skills/preflight-audit/fast-path-classifie
 assert(highCoupling.selection === 'FULL_SUITE', 'fast-path classifier change must use full suite');
 assert(highCoupling.selectedTests.length === highCoupling.commands.length && highCoupling.selectedTests.includes('work-start'), 'full suite must include the complete current selftest set');
 assert(highCoupling.reasons.includes('HIGH_COUPLING_PATH_REQUIRES_FULL_SUITE'), 'high coupling reason missing');
-for (const id of ['verification-scope','legacy-implementation-audit','research-gate','environment-lifecycle','agent-cycle','agent-job-bridge','apps-script-fixture','claude-job-launcher']) {
+for (const id of ['verification-scope','legacy-implementation-audit','research-gate','environment-lifecycle','agent-cycle','agent-job-bridge','apps-script-fixture','claude-job-launcher','improvement-followup']) {
   assert(highCoupling.selectedTests.includes(id), `full suite must include newly registered test ${id}`);
 }
 assert(highCoupling.reductionPercent === 0, 'FULL_SUITE reductionPercent must be 0');

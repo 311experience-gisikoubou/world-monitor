@@ -36,6 +36,53 @@ export function parseRepositoryFromRemote(url) {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
+// Escape a literal string for safe interpolation into a RegExp source. Used
+// anywhere a repository/owner string (which may contain regex metacharacters,
+// though GitHub names rarely do) is embedded in a pattern that must match it
+// literally, so an unescaped value can never widen the match.
+export function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Canonical job-to-Issue identity classification.
+//
+// Historically this reporter bound a local job directory to an Issue by a
+// loose/legacy check of `status.task === 'issue-<N>'`. That alone is prone to
+// false-positive binding (a wrong job silently reported as evidence for an
+// Issue), which can in turn produce a false human-gate or false DONE state.
+// `status.target_issue_number` is the newer, authoritative identity field.
+// Precedence, deliberately asymmetric so a malformed/contradictory record can
+// never be "rescued" by falling back to the legacy field:
+//   1. target_issue_number present and a positive safe integer -> that value
+//      is the sole canonical identity. The legacy status.task shape is still
+//      read only to detect an internal contradiction (case 3 below); once
+//      target_issue_number is present it is NEVER itself replaced by legacy.
+//   2. target_issue_number missing, null, or 0 -> no canonical identity was
+//      recorded; fall back to the legacy strict `issue-<N>` shape of
+//      status.task (exact digits, no leading zero, positive integer).
+//   3. Anything else -- non-integer, fraction, negative number, string, or a
+//      canonical value that contradicts a parseable legacy status.task --
+//      is REJECTed: the job carries no usable identity for matching, rather
+//      than silently matching the wrong Issue or guessing via the other field.
+export function classifyTargetIssueNumber(raw) {
+  const status = raw && typeof raw === 'object' ? raw : {};
+  const value = status.target_issue_number;
+  const legacyMatch = typeof status.task === 'string' ? /^issue-([0-9]+)$/.exec(status.task) : null;
+  const legacyNumber = legacyMatch ? Number(legacyMatch[1]) : null;
+  const legacyValid = legacyMatch !== null && Number.isSafeInteger(legacyNumber) && legacyNumber > 0 && String(legacyNumber) === legacyMatch[1];
+
+  if (value === undefined || value === null || value === 0) {
+    return legacyValid ? { kind: 'legacy', value: legacyNumber } : { kind: 'reject' };
+  }
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    return { kind: 'reject' };
+  }
+  if (legacyValid && legacyNumber !== value) {
+    return { kind: 'reject' };
+  }
+  return { kind: 'canonical', value };
+}
+
 export function executorFromOrchestrator(orch) {
   if (!orch || typeof orch !== 'object') return null;
   const sel = orch.routing?.selectedExecutor;
@@ -90,7 +137,8 @@ export function classifyLifecycle(issue, job) {
       case 'ai-running': return { stage: 'IMPLEMENTING', outcome: 'WAITING', human: none };
       case 'ai-review':
         if (!hasReadyEvidence(job)) return bad('ai-review without matching READY_FOR_REVIEW job evidence');
-        return { stage: 'REVIEW', outcome: 'PASS', human: { required: true, reason: 'final merge authorization is a human decision' } };
+        const gate = explicitHumanGate(job);
+        return { stage: 'REVIEW', outcome: 'PASS', human: gate ? { required: true, reason: gate } : none };
       default: {
         const gate = explicitHumanGate(job);
         return { stage: 'FAILED', outcome: 'FAIL', human: gate ? { required: true, reason: gate } : none };
@@ -107,7 +155,13 @@ function nextAction(stage, human) {
   switch (stage) {
     case 'QUEUED': return 'Wait for the poller/operator to start the job.';
     case 'IMPLEMENTING': return 'Wait for the running job to finish; check status.json.';
-    case 'REVIEW': return 'Human: review the PR/diff and decide on final merge authorization.';
+    case 'POST_JOB_REVIEW_STOP': return 'AI/ChatGPT: repair the recorded post-job failure; do not request merge authorization.';
+    case 'POST_JOB_REVIEW_PENDING': return 'AI post-job owner: continue bounded audit observation.';
+    case 'PR_FINAL_AUDIT_REQUIRED': return 'AI final-audit owner: re-fetch the recorded Draft PR and audit exact current HEAD; do not create a duplicate PR.';
+    case 'PUBLICATION_STATE_UNVERIFIED': return 'AI publication owner: reconcile the recorded PR with current Git/GitHub state before any further publication.';
+    case 'DRAFT_PR_HANDOFF_REQUIRED': return 'AI publication owner: verify the exact committed receipt, push, create Draft PR and audit actual PR HEAD.';
+    case 'REVIEW': if (human.required) return `Human decision required: ${human.reason}`;
+      return 'AI/ChatGPT: continue test/audit/Draft PR until actual exact-HEAD final audit; only then request human merge authorization.';
     case 'FAILED': return 'Inspect result.json/stderr.log; a human or ChatGPT replaces ai-failed with ai-job to retry.';
     case 'DONE': return 'None; work item is complete.';
     default: return `AI/ChatGPT: inspect and repair the inconsistent lifecycle labels/evidence (${human.reason}).`;
@@ -128,12 +182,46 @@ function evidenceSummary(job) {
     if (gates) out.push(`gates: ${gates}`);
     if (Array.isArray(job.result.changed_files)) out.push(`changed files: ${job.result.changed_files.length}`);
   }
+  if (job.status?.post_job_review === true) {
+    out.push(`post-job review: ${job.status.post_job_review_state ?? 'PENDING'} (${job.status.post_job_review_code ?? 'UNKNOWN'})`);
+    if (job.status.post_job_publication?.prUrl) out.push(`recorded Draft PR: ${job.status.post_job_publication.prUrl}; fresh GitHub final audit still required`);
+    if (job.status.post_job_review_head) out.push(`recorded audit HEAD: ${job.status.post_job_review_head}; verify receipt against current Git before publication`);
+  }
   if (job.orchestrator?.result) out.push(`orchestrator: ${job.orchestrator.result}${job.orchestrator.code ? ` (${job.orchestrator.code})` : ''}`);
   return out;
 }
 
 export function buildWorkState({ repository, issue, job = null, git = null }) {
-  const cls = classifyLifecycle(issue, job);
+  let cls = classifyLifecycle(issue, job);
+  // A genuine canonical human gate already classified above (e.g. REVIEW stage with an
+  // explicit HUMAN_GATE_REQUIRED/WAITING_AT_VALID_HUMAN_GATE/HUMAN_CONFIRMATION_REQUIRED
+  // code found in result/status/orchestrator) always takes priority over the ordinary
+  // AI-owned post-job/publication stage transition below. Without this guard the post-job
+  // override would unconditionally overwrite human.required=true with false, hiding a
+  // real human gate behind an AI-owned "continue bounded audit observation" message.
+  if (job?.status?.post_job_review === true && job.status.state === 'READY_FOR_REVIEW' &&
+      cls.stage !== 'CONFLICT' && cls.stage !== 'FAILED' && !cls.human.required &&
+      String(issue.state).toUpperCase() === 'OPEN') {
+    const review = job.status.post_job_review_state;
+    const publication = job.status.post_job_publication;
+    // Exact-match PR URL shape: https://github.com/<literal repository>/pull/<positive integer>
+    // with no extra path segments, trailing slash, query, fragment, or other repository. The
+    // repository is escaped before interpolation so it is always matched literally, never as a
+    // regex fragment. This reporter URL check is NOT proof of publication on its own -- it only
+    // guards against an obviously malformed/mismatched record; real GitHub metadata / exact-HEAD
+    // audit (PR_FINAL_AUDIT_REQUIRED) remains required before any merge-readiness claim.
+    const prUrlExactPattern = new RegExp(`^https://github\\.com/${escapeRegExp(repository ?? '')}/pull/[1-9][0-9]*$`);
+    const verifiedPublication = publication?.state === 'DRAFT_PR_CREATED' &&
+      publication.repository === repository && publication.branch === git?.branch &&
+      publication.head === git?.head && git?.tree === 'clean' &&
+      typeof publication.prUrl === 'string' &&
+      prUrlExactPattern.test(publication.prUrl);
+    cls = { stage: review === 'COMPLETED'
+      ? publication ? (verifiedPublication ? 'PR_FINAL_AUDIT_REQUIRED' : 'PUBLICATION_STATE_UNVERIFIED') : 'DRAFT_PR_HANDOFF_REQUIRED'
+      : review === 'STOP' || review === 'SKIPPED' ? 'POST_JOB_REVIEW_STOP' : 'POST_JOB_REVIEW_PENDING',
+      outcome: review === 'STOP' || review === 'SKIPPED' || (publication && !verifiedPublication) ? 'FAIL' : 'WAITING',
+      human: { required: false, reason: 'AI-owned post-job/publication work; source DONE is not merge readiness' } };
+  }
   const sections = parseIssueSections(issue.body);
   const executor = executorFromOrchestrator(job?.orchestrator);
   const labels = (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name));
@@ -229,6 +317,18 @@ function run(cmd, args, cwd) {
   return execFileSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 }
 
+// Binds a local job directory to an Issue using classifyTargetIssueNumber: the
+// canonical status.target_issue_number field is authoritative when present and
+// valid; the legacy strict `issue-<N>` shape of status.task is used only as a
+// fallback when target_issue_number is missing/null/0. A rejected (malformed or
+// internally contradictory) identity never matches any Issue number -- it is
+// not "rescued" by the other field, and is not loosened to a fuzzy/prefix
+// match, because doing so could silently bind the wrong job (a different
+// Issue number or phase) without the caller noticing, which is a worse
+// failure than reporting "no evidence". Existing historical job status.json
+// files are also never rewritten by this read-only reporter. A job with no
+// recoverable identity is a known COVERAGE_UNKNOWN gap, not a bug in the
+// matching predicate itself.
 export function discoverJob(repoRoot, issueNumber) {
   const jobsRoot = path.join(repoRoot, '.ai-jobs');
   if (!existsSync(jobsRoot)) return null;
@@ -237,9 +337,10 @@ export function discoverJob(repoRoot, issueNumber) {
   for (const name of dirs) {
     const dir = path.join(jobsRoot, name);
     const status = readJson(path.join(dir, 'status.json'));
-    if (status && status.task === `issue-${issueNumber}`) {
-      return { jobId: status.job_id ?? name, dir, status, result: readJson(path.join(dir, 'result.json')), orchestrator: readJson(path.join(dir, 'orchestrator.json')) };
-    }
+    if (!status) continue;
+    const identity = classifyTargetIssueNumber(status);
+    if (identity.kind === 'reject' || identity.value !== issueNumber) continue;
+    return { jobId: status.job_id ?? name, dir, status, result: readJson(path.join(dir, 'result.json')), orchestrator: readJson(path.join(dir, 'orchestrator.json')) };
   }
   return null;
 }

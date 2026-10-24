@@ -16,7 +16,7 @@ import {
   run,
 } from './claude-subscription-runner.mjs';
 import {
-  evaluateResearchGateBound, blocksSourceWrite,
+  evaluateResearchGateBound, blocksSourceWrite, BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE,
   validateResearchEnvelopeShape, buildResearchExpectedBinding,
 } from './research-gate.mjs';
 
@@ -25,7 +25,7 @@ const ROUTE_ID = 'claude-implementation-write';
 export const ALLOWED_CAPABILITIES = new Set(['implementation', 'bugfix', 'refactor', 'testing']);
 export const ALLOWED_DATA_CLASSES = new Set(['source-only', 'synthetic', 'public']);
 const SHA_RE = /^[0-9a-f]{40}$/i;
-const ALLOWED_KEYS = new Set(['schemaVersion', 'taskId', 'capability', 'dataClass', 'prompt', 'repoRoot', 'branch', 'allowedScope', 'forbiddenScope', 'repository', 'research']);
+const ALLOWED_KEYS = new Set(['schemaVersion', 'taskId', 'capability', 'dataClass', 'trialWriteMode', 'prompt', 'repoRoot', 'branch', 'allowedScope', 'forbiddenScope', 'repository', 'research']);
 const MAX_INPUT_BYTES = 64 * 1024;
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const DEFAULT_TIMEOUT_MS = 180000;
@@ -45,6 +45,29 @@ const GITHUB_SSH_URL_ORIGIN_RE = /^ssh:\/\/git@github\.com\/([^/]+)\/([^/]+?)(?:
 // robustly at the CLI permission boundary, so this phase narrows to source
 // edit only rather than weakening the write boundary. See SKILL.md.
 const IMPLEMENTATION_TOOLS = 'Read,Write,Edit,Glob,Grep';
+
+// Only a narrow, unmistakable Claude plan usage/rate-limit message that also
+// carries explicit reset/retry-later context is ever classified as a
+// provider capacity stop. Both a "hit your X limit" phrasing and an
+// "X limit reached/hit/exceeded" phrasing are recognized, each only when a
+// reset/retry/resume phrase also appears nearby. Any other nonzero exit
+// (including generic "rate limit" mentions with no reset context, or
+// unrelated provider/CLI errors) stays the generic PROVIDER_STOPPED code.
+// The matched text is used only to pick a stop CODE; it is never copied into
+// any returned result, so raw provider stdout/stderr (and anything
+// secret-shaped inside it) can never leak through this classification.
+const PROVIDER_CAPACITY_LIMIT_PHRASE = '(?:hit(?:ting)? (?:your |the )?(?:session|usage|plan|rate) limit|(?:session|usage|plan|rate) limit(?:ed)? (?:reached|hit|exceeded))';
+const PROVIDER_CAPACITY_RESET_PHRASE = '(?:reset|resets|resetting|retry[- ]after|try again (?:at|in|after)|resumes?|available again)';
+const PROVIDER_CAPACITY_REGEX = new RegExp(
+  `\\b${PROVIDER_CAPACITY_LIMIT_PHRASE}\\b[\\s\\S]{0,80}?\\b${PROVIDER_CAPACITY_RESET_PHRASE}\\b`, 'i',
+);
+const PROVIDER_CAPACITY_SCAN_MAX_CHARS = 16384;
+
+export function isProviderCapacityFailure(text) {
+  if (typeof text !== 'string' || text.length === 0) return false;
+  const bounded = text.length > PROVIDER_CAPACITY_SCAN_MAX_CHARS ? text.slice(0, PROVIDER_CAPACITY_SCAN_MAX_CHARS) : text;
+  return PROVIDER_CAPACITY_REGEX.test(bounded);
+}
 
 function safeToken(value) {
   return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(value);
@@ -104,6 +127,9 @@ export function validateImplementationTask(payload) {
   if (!safeToken(payload.taskId)) errors.push('taskId_invalid');
   if (!ALLOWED_CAPABILITIES.has(payload.capability)) errors.push('capability_invalid');
   if (!ALLOWED_DATA_CLASSES.has(payload.dataClass)) errors.push('dataClass_invalid');
+  if (payload.trialWriteMode !== undefined && payload.trialWriteMode !== BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE) {
+    errors.push('trialWriteMode_invalid');
+  }
   if (typeof payload.prompt !== 'string' || !payload.prompt.trim()) errors.push('prompt_invalid');
   else if (Buffer.byteLength(payload.prompt, 'utf8') > MAX_INPUT_BYTES) errors.push('prompt_too_large');
   if (typeof payload.repoRoot !== 'string' || !payload.repoRoot.trim()) errors.push('repoRoot_invalid');
@@ -259,25 +285,104 @@ function hashChangeRecords(records) {
   return createHash('sha256').update(canonical, 'utf8').digest('hex').toUpperCase();
 }
 
+// Resolves the exact blob OIDs 'git add' would store for the given changed,
+// non-deleted paths, using a TEMPORARY, ISOLATED git index rather than
+// 'git hash-object'. This is required because 'git hash-object <file>' reads
+// raw on-disk bytes and is blind to attribute/filter processing -- on a
+// Windows checkout with core.autocrlf=true, the file on disk already has
+// CRLF line endings, but the blob Git would actually stage/commit has LF, so
+// 'git hash-object' silently diverges from the real staged/committed blob
+// OID. Populating a scratch index via 'git read-tree preHead' and then
+// 'git add --all' into THAT index reproduces exactly what Git itself would
+// stage. GIT_INDEX_FILE is only ever set in the child processes' own env
+// (never in process.env itself), so the real index, worktree, branch, and
+// config are never touched; the temporary directory is always removed
+// before returning, on every exit path.
+function stagedBlobOidsViaTempIndex(repoRoot, preHead, paths) {
+  if (!Array.isArray(paths) || paths.length === 0) return null;
+  const uniquePaths = new Set(paths);
+  if (uniquePaths.size !== paths.length) return null; // duplicate paths fail closed
+  for (const changedPath of paths) {
+    if (typeof changedPath !== 'string' || changedPath.length === 0 ||
+        changedPath.includes('\0') || changedPath.startsWith('-')) return null;
+  }
+  let tempDir;
+  try {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'foundation-change-set-index-'));
+    const tempIndexFile = path.join(tempDir, 'index');
+    const childEnv = { ...process.env, GIT_INDEX_FILE: tempIndexFile };
+    const runIsolated = (args, timeoutMs = 10000) => spawnSync('git', ['-C', repoRoot, ...args], {
+      encoding: 'utf8', windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024, env: childEnv,
+    });
+
+    const readTree = runIsolated(['read-tree', preHead]);
+    if (readTree.error || readTree.status !== 0) return null;
+
+    const addResult = runIsolated(['add', '--all', '--', ...paths]);
+    if (addResult.error || addResult.status !== 0) return null;
+
+    const lsResult = runIsolated(['ls-files', '--stage', '-z', '--', ...paths]);
+    if (lsResult.error || lsResult.status !== 0) return null;
+
+    const entries = String(lsResult.stdout || '').split('\0').filter((entry) => entry.length > 0);
+    const byPath = new Map();
+    for (const entry of entries) {
+      // Entry shape: "<mode> <oid> <stage>\t<path>"
+      const tabIndex = entry.indexOf('\t');
+      if (tabIndex === -1) return null;
+      const meta = entry.slice(0, tabIndex).split(' ');
+      const entryPath = entry.slice(tabIndex + 1);
+      if (meta.length !== 3) return null;
+      const [, oid, stage] = meta;
+      if (stage !== '0') return null; // unmerged/unexpected stage fails closed
+      if (!SHA_RE.test(oid || '')) return null;
+      if (byPath.has(entryPath)) return null; // multiple entries for the same path fails closed
+      byPath.set(entryPath, oid.toLowerCase());
+    }
+    if (byPath.size !== paths.length) return null; // missing or unexpected extra entries fail closed
+
+    const records = [];
+    for (const changedPath of paths) {
+      const oid = byPath.get(changedPath);
+      if (!oid) return null; // missing entry for an exact requested path fails closed
+      records.push({ path: changedPath, deleted: false, blobOid: oid });
+    }
+    return records;
+  } catch {
+    return null;
+  } finally {
+    if (tempDir) {
+      try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort cleanup only */ }
+    }
+  }
+}
+
 // Enumerates the exact working-tree change set relative to HEAD (which must
 // still equal preHead, since the worktree was verified clean before Claude
 // ran and nothing else may commit in between). Tracked modifications and
 // deletions plus untracked new files are all covered -- this is the fix for
 // the gap where 'git diff' alone is blind to untracked files. Each non-
-// deleted path is hashed with the exact blob OID 'git add' would store
-// (attribute/filter-aware), never raw file contents.
+// deleted path's blob OID is resolved via stagedBlobOidsViaTempIndex, i.e.
+// the exact OID 'git add' would store (attribute/filter-aware), never raw
+// file contents and never 'git hash-object' (see that function for why).
 function workingTreeChangeRecords(repoRoot, preHead) {
   if (readHeadSha(repoRoot) !== preHead) return null;
   const statusResult = runGit(repoRoot, ['status', '--porcelain=v1', '--untracked-files=all', '--no-renames', '-z']);
   if (statusResult.error || statusResult.status !== 0) return null;
-  const raw = [];
+  const deletedPaths = [];
+  const changedPaths = [];
   for (const { code, path: changedPath } of parseStatusZ(statusResult.stdout)) {
     if (!/^[ MAD?]{2}$/.test(code)) return null; // unmerged/unexpected status fails closed
-    if (code[1] === 'D') { raw.push({ path: changedPath, deleted: true }); continue; }
-    const hashResult = runGit(repoRoot, ['hash-object', changedPath]);
-    if (hashResult.error || hashResult.status !== 0) return null;
-    raw.push({ path: changedPath, deleted: false, blobOid: String(hashResult.stdout || '').trim() });
+    if (typeof changedPath !== 'string' || changedPath.length === 0 || changedPath.includes('\0')) return null;
+    if (code[1] === 'D') { deletedPaths.push(changedPath); continue; }
+    changedPaths.push(changedPath);
   }
+  let addedRecords = [];
+  if (changedPaths.length > 0) {
+    addedRecords = stagedBlobOidsViaTempIndex(repoRoot, preHead, changedPaths);
+    if (!addedRecords) return null;
+  }
+  const raw = [...deletedPaths.map((p) => ({ path: p, deleted: true })), ...addedRecords];
   return normalizeChangeRecords(raw);
 }
 
@@ -411,7 +516,9 @@ export function runClaudeImplementationTask(payload, {
     taskId, repository: payload.repository, scope: payload.allowedScope,
   });
   const researchGate = evaluateResearchGateBound(payload.research.evidence, researchExpected);
-  if (blocksSourceWrite(researchGate)) return { ...stop('RESEARCH_GATE_BLOCKED', taskId), researchGate };
+  if (blocksSourceWrite(researchGate, { trialWriteMode: payload.trialWriteMode, dataClass: payload.dataClass })) {
+    return { ...stop('RESEARCH_GATE_BLOCKED', taskId), researchGate };
+  }
 
   if (!desc) return stop('CLAUDE_CLI_UNAVAILABLE', taskId);
   if (unsafeProviderEnvPresent(envSource)) return stop('UNSAFE_PROVIDER_ENV_PRESENT', taskId);
@@ -451,7 +558,16 @@ export function runClaudeImplementationTask(payload, {
     });
     if (result.error?.code === 'ETIMEDOUT') return stop('PROVIDER_TIMEOUT', taskId);
     if (result.error?.code === 'ENOBUFS') return stop('PROVIDER_OUTPUT_TOO_LARGE', taskId);
-    if (result.error || result.status !== 0) return stop('PROVIDER_STOPPED', taskId);
+    if (result.error) return stop('PROVIDER_STOPPED', taskId);
+    if (result.status !== 0) {
+      // Classification only ever decides which STOP code to return; the
+      // narrowly-matched provider text itself is discarded right here and
+      // never attached to the stop() result below.
+      if (isProviderCapacityFailure(`${result.stdout || ''}\n${result.stderr || ''}`)) {
+        return stop('PROVIDER_CAPACITY_UNAVAILABLE', taskId);
+      }
+      return stop('PROVIDER_STOPPED', taskId);
+    }
     let parsed;
     try { parsed = JSON.parse(result.stdout); } catch { return stop('PROVIDER_OUTPUT_INVALID', taskId); }
     if (parsed?.type !== 'result' || parsed?.subtype !== 'success' || parsed?.is_error !== false || typeof parsed?.result !== 'string') return stop('PROVIDER_OUTPUT_INVALID', taskId);

@@ -109,6 +109,15 @@ Do not delete branches automatically. Report "deletion possible" only when:
 
 Without explicit permission, judge and report only.
 
+## Mandatory Next Necessary Work Recommendation
+
+After **every verified successful merge**, the final user-facing merge report **must include a next-work recommendation**, not stop at "merged", "all done", or "nothing else" without an evidence-based assessment. Reuse the existing `post-merge-verification` step; do not create a new watcher, notifier, or duplicate project planner.
+
+- Read the latest applicable Issue/PR state and approved project objective from the **active Project Root**; choose **one highest-priority necessary next task**, accounting for safety, blocked dependencies, open Drafts, current exact-head status and active ownership. Include its purpose, concrete evidence/link, why it comes next, and which action AI may take versus any genuine human decision. If several unrelated tasks remain, propose one first and mention another only where a dependency or parallelism materially changes the decision.
+- A finished PR is **not** proof that the whole project is finished. If no required task exists after checking the current source of truth, explicitly write `次の必須作業なし` and state the checked scope; optional ideas must be labelled optional. If GitHub/live state is unavailable, write `次の作業は現状未確認` and do not invent evidence, imply a task is complete, or prompt repeated manual status copying.
+- A recommendation **does not** authorize a new scope, another PR's merge, production changes, data access or fees. The AI may continue already-approved same-scope safe mechanical work without asking the user to type `次`; other work requires its existing project-intake and human approval boundary. Critical escalation remains limited to cost, danger or genuinely human-owned value decisions.
+- Record intermediate faults in the existing issue/job evidence. Report useful outcomes and necessary next steps **once after the completed merge**, not as repetitive progress interruptions.
+
 ## Output
 
 Report:
@@ -124,6 +133,7 @@ Report:
 - Branch deletion judgment and whether deletion was performed
 - Operations not performed
 - Blockers
+- **Next necessary work**: one evidence-backed prioritized task, or explicit none/unknown with grounds; identify AI versus human action and preserve the separate merge authority
 
 ## Application-Specific Configuration
 

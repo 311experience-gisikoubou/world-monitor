@@ -309,4 +309,75 @@ function decodeEmbeddedResearchEnvelope(markdown) {
   assert.deepEqual(decodedViaIntake.value, decoded.value, 'renderAiJobIssue and the direct low-level renderer embed identical evidence for the same task');
 }
 
+// SYNTHETIC-only negative regression: a shape-valid raw Research envelope
+// that is bound (via evidenceBinding) to the WRONG taskId/repository/scope,
+// or whose assessedAtUtcMs is stale, must independently fail the
+// re-qualification inside renderPollerIssueFromTask -- even though
+// validateOrchestrationTask/validateResearchEnvelopeShape only check SHAPE.
+// These fixtures are entirely synthetic and are never asserted to equal real
+// researched evidence; they only prove the gate blocks a mismatched/stale
+// envelope rather than silently trusting it.
+function taskWithBrokenResearchBinding(bindingOverrides) {
+  const base = task();
+  const research = JSON.parse(JSON.stringify(base.research));
+  Object.assign(research.evidence.evidenceBinding, bindingOverrides);
+  return { ...base, research };
+}
+{
+  const wrongTaskId = renderPollerIssueFromTask(taskWithBrokenResearchBinding({ taskId: 'not-demo-task' }));
+  assert.equal(wrongTaskId.result, 'STOP', 'research envelope bound to the wrong taskId must STOP');
+  assert.equal(wrongTaskId.code, 'PROJECT_INTAKE_JOB_RESEARCH_GATE_BLOCKED');
+  assert.equal(wrongTaskId.markdown, undefined, 'blocked research gate must not render markdown');
+
+  const wrongRepository = renderPollerIssueFromTask(taskWithBrokenResearchBinding({ repository: { owner: 'someone-else', name: 'demo' } }));
+  assert.equal(wrongRepository.result, 'STOP', 'research envelope bound to the wrong repository must STOP');
+  assert.equal(wrongRepository.code, 'PROJECT_INTAKE_JOB_RESEARCH_GATE_BLOCKED');
+  assert.equal(wrongRepository.markdown, undefined, 'blocked research gate must not render markdown');
+
+  const wrongScope = renderPollerIssueFromTask(taskWithBrokenResearchBinding({ scope: ['unrelated/path.mjs'] }));
+  assert.equal(wrongScope.result, 'STOP', 'research envelope bound to the wrong scope must STOP');
+  assert.equal(wrongScope.code, 'PROJECT_INTAKE_JOB_RESEARCH_GATE_BLOCKED');
+  assert.equal(wrongScope.markdown, undefined, 'blocked research gate must not render markdown');
+
+  const staleEvidence = renderPollerIssueFromTask(taskWithBrokenResearchBinding({ assessedAtUtcMs: TASK_FIXTURE_NOW - (25 * 60 * 60 * 1000) }));
+  assert.equal(staleEvidence.result, 'STOP', 'stale research evidence must STOP');
+  assert.equal(staleEvidence.code, 'PROJECT_INTAKE_JOB_RESEARCH_GATE_BLOCKED');
+  assert.equal(staleEvidence.markdown, undefined, 'blocked research gate must not render markdown');
+
+  // Regression guard: the valid, original, current task fixture must still
+  // PROCEED with exactly one embedded research envelope -- the synthetic
+  // negatives above must never weaken the happy path.
+  const stillValid = renderPollerIssueFromTask(task());
+  assert.equal(stillValid.result, 'PROCEED', 'the valid original current task must still PROCEED');
+  assert.equal(decodeEmbeddedResearchEnvelope(stillValid.markdown).matchCount, 1, 'valid current task embeds exactly one research envelope');
+}
+
+// SYNTHETIC-only negative regression: a shape-valid instructionClarity input
+// carrying an unresolved MATERIAL/HUMAN ambiguity must independently block
+// via evaluateInstructionClarity's qualification, not merely pass shape
+// validation.
+{
+  const unresolvedMaterial = task({
+    instructionClarity: {
+      schemaVersion: 1,
+      taskId: 'demo-task',
+      instructions: [{ id: 'intake-1', kind: 'INSTRUCTION', summary: 'Build the approved small local helper within the bounded scope.' }],
+      unlistedAssumptionsPresent: false,
+      ambiguities: [{
+        id: 'amb-1',
+        summary: 'Unclear whether the confirmation dialog should block navigation.',
+        category: 'user-visible-design-behavior',
+        materiality: 'MATERIAL',
+        classificationReason: 'Changes user-visible behavior and needs a human value decision.',
+        decisionOwner: 'HUMAN',
+        resolution: 'UNRESOLVED',
+      }],
+    },
+  });
+  const blocked = renderPollerIssueFromTask(unresolvedMaterial);
+  assert.equal(blocked.result, 'STOP', 'unresolved MATERIAL/HUMAN ambiguity must STOP');
+  assert.equal(blocked.code, 'PROJECT_INTAKE_JOB_INSTRUCTION_CLARITY_NOT_CONFIRMED');
+  assert.equal(blocked.markdown, undefined, 'unresolved material ambiguity must not render markdown');
+}
+
 console.log('project-intake-gate selftest: PASS');

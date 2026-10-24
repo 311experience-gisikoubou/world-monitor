@@ -25,6 +25,22 @@ The turn state is a closed `schemaVersion: 1` object containing exactly `activeP
 - `--turn-start` never authorizes an explicit Project change. A user request that explicitly names another Project/repository proceeds through the normal scope/ownership/context decision path instead of being treated as implicit continuation.
 - Browser ChatGPT or another environment that cannot independently retain candidate identity and mechanically invoke the CLI follows the same active-project-first rule operationally, but that protection is `OPERATIONAL`, not `ENFORCED`.
 
+## External Identity Binding (Issue #283, part B)
+
+Before acting against a specific GitHub Issue/PR/job as the active Project, verify that the declared external identity (repository, Issue/PR number, job id, branch, HEAD) agrees with both the canonical Project Root manifest and an already-observed current branch/HEAD. Never infer this binding from recent commit/PR activity volume.
+
+```text
+node .agents/skills/handoff/project-context-guard.mjs --context-file <active-project-root>/PROJECT_CONTEXT.json --verify-binding --binding-file <external-identity-binding-json> --pretty
+```
+
+The binding evidence is a closed `schemaVersion: 1` object containing exactly `declaredProjectContextId`, `declaredContextFingerprint`, `declaredRepository`, `declaredIssueNumber`, `declaredPrNumber`, `declaredJobId` (at least one of the three target identifiers must be non-null), `declaredBranch`, `declaredHeadSha`, `observedBranch`, and `observedHeadSha`. Both `observedBranch`/`observedHeadSha` must come from an already-independent observation (for example `--turn-start`/`observeProjectContextEvidence` or `local-ai-handoff/work-state-report.mjs`), not from this call itself; the function performs no Git/network access and makes no fresh observation.
+
+- Matching declared/observed identity returns `EXTERNAL_IDENTITY_BOUND`.
+- A declared project identity or fingerprint that disagrees with the canonical Project Root manifest returns `PROJECT_CONTEXT_TRANSITION_MISMATCH`.
+- A declared repository outside the active Project Root/current repository returns `EXTERNAL_IDENTITY_REPOSITORY_MISMATCH`.
+- A declared branch or HEAD that disagrees with the supplied observed branch/HEAD returns `EXTERNAL_IDENTITY_BRANCH_MISMATCH` / `EXTERNAL_IDENTITY_HEAD_MISMATCH`.
+- `--verify-binding` cannot be combined with `--render`, `--turn-start`, `--handoff-file`, `--state-file`, or `--state-json`, and requires the canonical Project Root manifest exactly like the other modes.
+
 ## Canonical Project Context
 
 Every participating repository may carry `PROJECT_CONTEXT.json`, but handoff authority comes only from the Project Root repository's file with `repositoryRole=ROOT`. Related Repo manifests are never accepted as canonical handoff identity. The CLI verifies that the canonical file is named exactly `PROJECT_CONTEXT.json`, is at repository root, and that `thisRepository` matches the exact GitHub `origin`; copied, misdirected, lookalike-host, or Git `url.*.insteadOf`-rewritten origins fail closed without network access; configured and effective origin identities must agree. Configured origin values are read with NUL framing rather than line trimming, so surrounding/internal whitespace, carriage returns, or other malformed bytes are rejected rather than normalized. Repository/configuration-changing Git environment overrides such as `GIT_DIR`, `GIT_WORK_TREE`, or `GIT_CONFIG_*` cause fail-closed before evidence probes; the guard does not silently ignore an active alternate Git configuration.
@@ -51,6 +67,8 @@ node .agents/skills/handoff/canonical-contract-gate.mjs --context-file PROJECT_C
 ```
 
 The contract records CURRENT, SUPERSEDED, HISTORICAL, and DRAFT artifacts by stable slot. Exactly one CURRENT artifact may exist per slot. SUPERSEDED artifacts may remain in the repository for history but can never appear in `usedSpecIds` as implementation authority. DESIGN artifacts carry a visual contract identity/version/scope and baseline type. A work state binds the exact repository, contract ID/version, selected target per slot, specs actually used, and Functional Gate result. `CANONICAL_TARGET_MISMATCH`, `SUPERSEDED_SPEC_USED`, missing/ambiguous contracts, cross-repository references, or missing CURRENT source files are STOP.
+
+A work state's optional `taskTypes` field stays unnecessary only while no selected/used CURRENT artifact is a `visual.baseline: REFERENCE_IMAGE` design, preserving legacy work states without a schema break. The moment any selected or used CURRENT artifact is a REFERENCE_IMAGE design, the gate itself requires `taskTypes` to be present and to include `UI_REFERENCE_REPRODUCTION`; omitting `taskTypes` returns `UI_REFERENCE_REPRODUCTION_CLASSIFICATION_REQUIRED` and classifying it as plain `UI` (or any set without `UI_REFERENCE_REPRODUCTION`) returns `UI_REFERENCE_REPRODUCTION_MISCLASSIFIED`. Both are STOP regardless of `functionalGate`, so a passing headless/functional screenshot can never substitute for the required approved-reference reproduction flow (canonicalization, numeric, FINAL visual-diff, and fixed-shape evidence) described above.
 
 At ordinary turn-start, `project-context-guard.mjs --turn-start` validates the Contract and its committed CURRENT sources automatically. Normal aligned work continues without a human confirmation. Contract conflicts are technical STOPs for AI-owned correction unless the conflict represents a genuine unresolved human specification decision.
 

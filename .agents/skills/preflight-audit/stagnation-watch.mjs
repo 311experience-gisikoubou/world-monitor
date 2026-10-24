@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
+import { verifyHumanVisualReviewReceipt } from '../test-gate/human-visual-review-gate.mjs';
 
 const args = process.argv.slice(2);
 function argValue(name, fallback = '') {
@@ -77,6 +78,8 @@ const completionTarget = argValue('--completion-target', 'none').trim().toLowerC
 const responseIntent = argValue('--response-intent', 'continue').trim().toLowerCase();
 const aiRouteState = argValue('--ai-route-state', 'available').trim().toLowerCase();
 const humanGateKind = argValue('--human-gate-kind', humanGate === 'none' ? 'none' : 'unspecified').trim().toLowerCase();
+const humanVisualReviewStateId = argValue('--human-visual-review-state-id').trim();
+const humanVisualReviewReceiptFile = argValue('--human-visual-review-receipt-file').trim();
 const testGateState = argValue('--test-gate-state', 'not-run').trim().toLowerCase();
 const commitState = argValue('--commit-state', 'not-done').trim().toLowerCase();
 const pushState = argValue('--push-state', 'not-done').trim().toLowerCase();
@@ -108,8 +111,9 @@ if (!['continue','terminate','platform-turn-boundary'].includes(responseIntent))
 if (!['available','exhausted'].includes(aiRouteState)) stop('--ai-route-state invalid');
 if (!['none','unspecified','merge-authorization','cost','credentials-authentication','destructive-high-risk','production-real-data','business-spec-value','protected-data-policy','subjective-real-device','scope-safety-boundary','workflow-ownership'].includes(humanGateKind)) stop('--human-gate-kind invalid');
 if (humanGate === 'none' && humanGateKind !== 'none') stop('--human-gate-kind must be none when --human-gate is none');
-if (humanGate === 'required' && humanGateKind === 'none') stop('--human-gate-kind must identify the required human gate');
-if (completionTarget === 'pre-merge' && humanGate === 'required' && humanGateKind === 'unspecified') stop('--human-gate-kind is required for pre-merge completion');
+if (humanGate === 'required' && (humanGateKind === 'none' || humanGateKind === 'unspecified')) {
+  stop('--human-gate-kind must name a genuine human decision for every work target; technical errors, crashes, connection failures, and redundant checks remain AI-owned', 'HUMAN_GATE_KIND_REQUIRED');
+}
 if (aiRouteState === 'exhausted' && humanGate === 'required') stop('--ai-route-state exhausted cannot coexist with a human gate');
 if (workState === 'complete' && humanGate === 'required') stop('--work-state complete cannot coexist with a human gate');
 if (!['not-run','pass','fail','unknown'].includes(testGateState)) stop('--test-gate-state invalid');
@@ -119,6 +123,8 @@ if (!['unknown','yes','no'].includes(prDraft)) stop('--pr-draft invalid');
 if (!['not-run','pass','fail','unknown'].includes(finalAuditState)) stop('--final-audit-state invalid');
 if (!['not-verified','verified','unknown'].includes(exactPrHeadState)) stop('--exact-pr-head-state invalid');
 if (!['product', 'all'].includes(fingerprintScope)) stop('--fingerprint-scope must be product|all');
+if (humanVisualReviewStateId.length > 256) stop('--human-visual-review-state-id too long');
+if (humanVisualReviewReceiptFile.length > 2000) stop('--human-visual-review-receipt-file too long');
 if (!['none','user-correction','reference-miss','repeated-status','timeout-repeat','reasked-known'].includes(interactionSignal)) stop('--interaction-signal invalid');
 if (interactionSignal !== 'none' && !interactionKey) stop('--interaction-key required when interaction signal is set');
 if (interactionKey.length > 256) stop('--interaction-key too long');
@@ -132,6 +138,29 @@ if (!Number.isFinite(intervalMinutes) || intervalMinutes <= 0) stop('--interval-
 const intervalMs = intervalMinutes * 60_000;
 const now = nowRaw ? Date.parse(nowRaw) : Date.now();
 if (!Number.isFinite(now)) stop('--now must be ISO-8601 parseable');
+
+let humanVisualReviewReady = humanGateKind !== 'subjective-real-device';
+let humanVisualReviewReceiptId = null;
+let humanVisualReviewReason = null;
+if (humanGate === 'required' && humanGateKind === 'subjective-real-device') {
+  humanVisualReviewReady = false;
+  if (!humanVisualReviewStateId || !humanVisualReviewReceiptFile) {
+    humanVisualReviewReason = 'HUMAN_VISUAL_REVIEW_RECEIPT_REQUIRED';
+  } else {
+    try {
+      const receipt = JSON.parse(await readFile(resolve(humanVisualReviewReceiptFile), 'utf8'));
+      const verified = verifyHumanVisualReviewReceipt(receipt, humanVisualReviewStateId);
+      if (verified.ok) {
+        humanVisualReviewReady = true;
+        humanVisualReviewReceiptId = verified.receiptId;
+      } else {
+        humanVisualReviewReason = verified.code;
+      }
+    } catch (error) {
+      humanVisualReviewReason = error?.code || error?.message || 'HUMAN_VISUAL_REVIEW_RECEIPT_INVALID';
+    }
+  }
+}
 
 const rootCheck = git(targetRoot, ['rev-parse', '--show-toplevel']);
 const gitRoot = resolve(rootCheck.stdout.trim());
@@ -147,8 +176,12 @@ const preMergeTechnicalReady = completionTarget === 'pre-merge'
   && prState === 'open' && prDraft === 'yes' && finalAuditState === 'pass' && exactPrHeadState === 'verified';
 const prematureMergeAuthorization = completionTarget === 'pre-merge' && !preMergeTechnicalReady
   && humanGate === 'required' && humanGateKind === 'merge-authorization';
+// `complete` is not a valid substitute for merge authorization on a pre-merge target.
+const conflictingPreMergeCompletion = completionTarget === 'pre-merge' && workState === 'complete';
 let terminalState = 'AI_CONTINUES';
-if (workState === 'complete') terminalState = 'COMPLETE';
+if (conflictingPreMergeCompletion) terminalState = 'AI_CONTINUES';
+else if (workState === 'complete') terminalState = 'COMPLETE';
+else if (humanGate === 'required' && humanGateKind === 'subjective-real-device' && !humanVisualReviewReady) terminalState = 'AI_CONTINUES';
 else if (humanGate === 'required' && humanGateKind !== 'merge-authorization') terminalState = 'HUMAN_CONFIRMATION_REQUIRED';
 else if (preMergeTechnicalReady) terminalState = 'PRE_MERGE_READY';
 else if (humanGate === 'required' && !prematureMergeAuthorization) terminalState = 'HUMAN_CONFIRMATION_REQUIRED';
@@ -263,7 +296,13 @@ let nextState = baseState;
 let detail = {};
 let handoffClass = humanGate === 'required' ? 'HUMAN_REQUIRED' : 'AI_OWNED';
 
-if (workState === 'complete') {
+if (conflictingPreMergeCompletion) {
+  result = 'STOP';
+  code = 'PRE_MERGE_COMPLETION_STATE_CONFLICT';
+  handoffClass = 'AI_OWNED';
+  nextState = { ...(previous ?? baseState), workId, lastCheckpointAt: isoNow, updatedAt: isoNow,
+    level: 'L1', requiredAction: 'complete-pre-merge-verification' };
+} else if (workState === 'complete') {
   result = 'COMPLETE';
   code = 'WORK_COMPLETE';
   nextState = { ...baseState, level: 'COMPLETE', requiredAction: 'none' };
@@ -308,6 +347,14 @@ if (workState === 'complete') {
 } else if (aiRouteState === 'exhausted') {
   result = 'BLOCKED'; code = 'SAFE_AI_ROUTE_EXHAUSTED'; handoffClass = 'AI_OWNED';
   nextState = { ...(previous ?? baseState), workId, lastCheckpointAt: isoNow, updatedAt: isoNow, level:'BLOCKED', requiredAction:'report-blocked' };
+} else if (humanGate === 'required' && humanGateKind === 'subjective-real-device' && !humanVisualReviewReady) {
+  result = 'STOP';
+  code = humanVisualReviewReason === 'HUMAN_VISUAL_REVIEW_RECEIPT_REQUIRED'
+    ? 'HUMAN_VISUAL_REVIEW_RECEIPT_REQUIRED'
+    : 'HUMAN_VISUAL_REVIEW_RECEIPT_INVALID';
+  handoffClass = 'AI_OWNED';
+  nextState = { ...(previous ?? baseState), workId, lastCheckpointAt: isoNow, updatedAt: isoNow, level:'L1', requiredAction:'prepare-human-visual-review' };
+  detail = { ...detail, humanVisualReviewReason };
 } else if (humanGate === 'required') {
   if (continuationAction !== 'wait-human') {
     result = 'STOP';
@@ -491,6 +538,9 @@ const output = {
   workState,
   humanGate,
   humanGateKind,
+  humanVisualReviewReady,
+  humanVisualReviewReceiptId,
+  humanVisualReviewReason,
   handoffClass,
   continuationAction,
   completionTarget,

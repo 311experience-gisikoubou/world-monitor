@@ -41,6 +41,43 @@ function Get-DirtyPaths([string]$root) {
     $x += @(git -C $root ls-files --others --exclude-standard 2>$null)
     @($x | Where-Object { $_ } | Sort-Object -Unique)
 }
+
+# Existing WAIT_PROVIDER continuation can checkpoint a dirty in-scope source
+# worktree on resume. Park ONLY bounded, demonstrably source-only edits;
+# leave the originals untouched at quota stop. No commit, push or retry here.
+# Anything ambiguous still goes through the existing CLAUDE_FAILED hard stop.
+function Test-DirtyCapacityWait([string]$root, [string]$expectedBranch, [string[]]$scope) {
+    $status = @(git -C $root status --porcelain=v1 --untracked-files=all 2>$null)
+    if ($LASTEXITCODE -ne 0) { return @{ safe = $false; code = 'GIT_STATUS_UNAVAILABLE'; paths = @() } }
+    $currentBranch = [string](git -C $root rev-parse --abbrev-ref HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $currentBranch.Trim() -ne $expectedBranch -or
+        -not $expectedBranch.StartsWith('job/')) {
+        return @{ safe = $false; code = 'BRANCH_IDENTITY_MISMATCH'; paths = @() }
+    }
+    $paths = @(Get-DirtyPaths $root)
+    if ($paths.Count -eq 0 -or $paths.Count -gt 20 -or $status.Count -ne $paths.Count) {
+        return @{ safe = $false; code = 'DIRTY_SET_AMBIGUOUS'; paths = @($paths) }
+    }
+    foreach ($s in $status) {
+        # Allow a simple tracked edit/add or an untracked file. Never
+        # silently checkpoint deletions, renames, conflicts or submodules.
+        if ($s.Length -lt 4 -or ($s.Substring(0, 2) -notin @('??', ' M', 'M ', 'MM', ' A', 'A ', 'AM'))) {
+            return @{ safe = $false; code = 'DIRTY_STATUS_UNSAFE'; paths = @($paths) }
+        }
+    }
+    foreach ($file in $paths) {
+        if (-not (In-Scope $file $scope) -or $file -match '(^|/)\.\.(?:/|$)' -or
+            $file -match '[\r\n\\]' -or $file.StartsWith('/') -or
+            $file -match '(?i)(^|/)(?:\.env(?:\.|$)|[^/]*(?:secret|credential|token|patient|private-key)[^/]*)' -or
+            $file -notmatch '(?i)\.(?:js|mjs|cjs|ts|tsx|jsx|py|rs|ps1|md|html|css|json|toml|yaml|yml)$') {
+            return @{ safe = $false; code = 'DIRTY_SCOPE_OR_DATA_UNSAFE'; paths = @($paths) }
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $root ($file -replace '/', '\')) -PathType Leaf)) {
+            return @{ safe = $false; code = 'DIRTY_FILE_MISSING_OR_SPECIAL'; paths = @($paths) }
+        }
+    }
+    return @{ safe = $true; code = 'DIRTY_SOURCE_PRESERVED'; paths = @($paths) }
+}
 # Commits already scope-PASS attempt changes on the same job branch, then proves the worktree is clean.
 # Never resets, force-pushes, merges, or touches other branches. Returns @{ ok; commit; error }.
 function Invoke-RetryCheckpoint {
@@ -70,7 +107,12 @@ function Invoke-RetryCheckpoint {
 }
 
 $st = Get-Content $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$selfStartTicks = [int64](Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks
+# Cast to a decimal STRING before this ever reaches JSON: a bare JSON
+# number here would already have lost precision in any later JSON.parse
+# (.NET Ticks routinely exceed Number.MAX_SAFE_INTEGER). Existing
+# cast-to-[int64] readers (e.g. Process-MatchesIdentity in
+# run-claude-job.ps1) remain compatible with a string input.
+$selfStartTicks = ([int64](Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks).ToString()
 Update-Status @{ state = 'RUNNING'; runner_pid = $PID; runner_process_start_utc_ticks = $selfStartTicks; runner_started_at = (Get-Date).ToString('o') }
 $gates = [ordered]@{}
 
@@ -140,6 +182,41 @@ try {
         $gates['orchestrator_exit'] = if ($nodeExit -eq 0) { 'PASS' } else { "FAIL: exit $nodeExit" }
         $gates['claude_result'] = if ($orch -and $orch.result -eq 'COMPLETED') { 'PASS' } else { "FAIL: $(Prop $orch 'code')" }
         Update-Status @{ state = 'GATES_RUNNING'; orchestrator_code = (Prop $orch 'code'); claude_ended_at = (Get-Date).ToString('o') }
+
+        # A quota stop is never retried in this invocation. A clean
+        # worktree waits as before. Bounded in-scope, source-only dirty WIP
+        # also waits WITHOUT any checkpoint here; the existing claim-aware
+        # ContinueJob route is the only allowed later checkpoint/resume.
+        # Unsafe/ambiguous dirty state retains the original fail-closed stop.
+        if ([string](Prop $orch 'code') -eq 'PROVIDER_CAPACITY_UNAVAILABLE') {
+            $capacityDirty = @(Get-DirtyPaths $st.worktree)
+            $changed = @($capacityDirty)
+            if ($capacityDirty.Count -eq 0) {
+                $final = 'WAIT_PROVIDER'
+                $retryStopCode = 'PROVIDER_CAPACITY_UNAVAILABLE'
+                $gates['provider_capacity'] = 'WAIT: clean worktree'
+            } else {
+                $decision = Test-DirtyCapacityWait $st.worktree ([string]$st.branch) @($st.scope_paths)
+                if ($decision.safe -eq $true) {
+                    $final = 'WAIT_PROVIDER'
+                    $retryStopCode = 'PROVIDER_CAPACITY_DIRTY_SOURCE_PRESERVED'
+                    $gates['provider_capacity'] = 'WAIT: bounded in-scope dirty source preserved'
+                } else {
+                    $final = 'CLAUDE_FAILED'
+                    $retryStopCode = 'PROVIDER_CAPACITY_WITH_SOURCE_CHANGES'
+                    $gates['provider_capacity'] = 'FAIL: dirty source unsafe for continuation (' + $decision.code + ')'
+                }
+            }
+            $attemptDir = Join-Path (Join-Path $JobDir 'attempts') ('attempt-{0}' -f $attempt)
+            New-Item -ItemType Directory -Force -Path $attemptDir | Out-Null
+            foreach ($f in @('task.json', 'instruction-clarity.json', 'orchestrator.json', 'test.log', 'stderr.log')) {
+                $src = Join-Path $JobDir $f
+                if (Test-Path $src) { Copy-Item $src (Join-Path $attemptDir $f) -Force }
+            }
+            Save-Json ([ordered]@{ attempt = $attempt; final_state = $final; gates = $gates; changed_files = $changed }) (Join-Path $attemptDir 'result.json')
+            $attempts += [ordered]@{ attempt = $attempt; final_state = $final; test = 'SKIPPED: provider capacity unavailable'; fingerprint = $null }
+            break
+        }
 
         $changed = @()
         $changed += @(git -C $st.worktree diff --name-only $st.root_base_commit 2>$null)

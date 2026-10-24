@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 const guardArg = process.argv[2];
 if (!guardArg) throw new Error('guard path required');
 const guardPath = resolve(guardArg);
-const { validateProjectContext, validateTurnContinuation, renderHandoffSkeleton, validateHandoffArtifact, parseJsonStrict, observeProjectContextEvidence } = await import(pathToFileURL(guardPath).href);
+const { validateProjectContext, validateTurnContinuation, renderHandoffSkeleton, validateHandoffArtifact, parseJsonStrict, observeProjectContextEvidence, validateExternalIdentityBinding } = await import(pathToFileURL(guardPath).href);
 
 function assert(condition, message) { if (!condition) throw new Error(`FAIL: ${message}`); }
 function complete(markdown) { return markdown; }
@@ -336,6 +336,62 @@ function state(overrides = {}) {
   assert(!text.includes('DO_NOT_EMIT'), 'unknown fields must not leak');
 }
 
+// Part B (Issue #283): external Issue/PR/job/branch/HEAD identity binding.
+function externalBinding(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    declaredProjectContextId: 'delivery-billing-v1',
+    declaredContextFingerprint: BASE_FINGERPRINT,
+    declaredRepository: '311experience-gisikoubou/dental-delivery-billing',
+    declaredIssueNumber: 42,
+    declaredPrNumber: null,
+    declaredJobId: null,
+    declaredBranch: 'feature/x',
+    declaredHeadSha: 'a'.repeat(40),
+    observedBranch: 'feature/x',
+    observedHeadSha: 'a'.repeat(40),
+    ...overrides,
+  };
+}
+{
+  const result = validateExternalIdentityBinding(manifest(), externalBinding());
+  assert(result.result === 'PROCEED' && result.code === 'EXTERNAL_IDENTITY_BOUND', 'matching declared/observed external identity should bind');
+  assert(result.issueNumber === 42 && result.branch === 'feature/x', 'bound identity should surface the declared Issue/branch identity');
+}
+{
+  const result = validateExternalIdentityBinding(manifest(), externalBinding({ observedBranch: 'other-branch' }));
+  assert(result.code === 'EXTERNAL_IDENTITY_BRANCH_MISMATCH', 'declared branch must match the independently observed branch');
+}
+{
+  const result = validateExternalIdentityBinding(manifest(), externalBinding({ observedHeadSha: 'b'.repeat(40) }));
+  assert(result.code === 'EXTERNAL_IDENTITY_HEAD_MISMATCH', 'declared HEAD must match the independently observed HEAD');
+}
+{
+  const result = validateExternalIdentityBinding(manifest(), externalBinding({ declaredRepository: '311experience-gisikoubou/digital-work-order' }));
+  assert(result.code === 'EXTERNAL_IDENTITY_REPOSITORY_MISMATCH', 'declared Issue/PR/job repository must match the active Project Root or current repository');
+}
+{
+  const result = validateExternalIdentityBinding(manifest(), externalBinding({ declaredProjectContextId: 'other-project-v1' }));
+  assert(result.code === 'PROJECT_CONTEXT_TRANSITION_MISMATCH', 'declared project identity must match the active canonical Project Root manifest');
+}
+{
+  const result = validateExternalIdentityBinding(manifest(), externalBinding({ declaredIssueNumber: null, declaredPrNumber: null, declaredJobId: null }));
+  assert(result.code === 'EXTERNAL_IDENTITY_TARGET_MISSING', 'at least one of Issue/PR/job identity is required');
+}
+{
+  const relatedManifest = manifest({ thisRepository: '311experience-gisikoubou/digital-work-order', repositoryRole: 'RELATED' });
+  const result = validateExternalIdentityBinding(relatedManifest, externalBinding());
+  assert(result.code === 'PROJECT_CONTEXT_CANONICAL_ROOT_REQUIRED', 'external identity binding must use the canonical Project Root manifest');
+}
+{
+  const result = validateExternalIdentityBinding(manifest(), { ...externalBinding(), extraField: 1 });
+  assert(result.code === 'EXTERNAL_IDENTITY_EVIDENCE_INVALID', 'unexpected top-level binding fields must fail closed');
+}
+{
+  const result = validateExternalIdentityBinding(manifest(), externalBinding({ declaredHeadSha: 'not-a-sha' }));
+  assert(result.code === 'EXTERNAL_IDENTITY_EVIDENCE_INVALID', 'malformed declared HEAD SHA must fail closed');
+}
+
 const temp = await mkdtemp(join(tmpdir(), 'project-context-guard-selftest-'));
 try {
   const init = spawnSync('git', ['init', temp], { encoding: 'utf8' });
@@ -355,6 +411,16 @@ try {
   assert(commitContext.status === 0, 'context fixture commit should pass');
   const liveObservation = observeProjectContextEvidence(manifestPath);
   assert(liveObservation.result === 'PROCEED' && liveObservation.actualRepository === '311experience-gisikoubou/dental-delivery-billing' && /^[a-f0-9]{40}$/.test(liveObservation.headSha), 'live Project Context observation must bind committed identity to Git');
+  const bindingPath = join(temp, 'binding.json');
+  const alignedBinding = { schemaVersion:1, declaredProjectContextId:'delivery-billing-v1', declaredContextFingerprint:BASE_FINGERPRINT, declaredRepository:'311experience-gisikoubou/dental-delivery-billing', declaredIssueNumber:42, declaredPrNumber:null, declaredJobId:null, declaredBranch:liveObservation.currentBranch, declaredHeadSha:liveObservation.headSha, observedBranch:liveObservation.currentBranch, observedHeadSha:liveObservation.headSha };
+  await writeFile(bindingPath, JSON.stringify(alignedBinding), 'utf8');
+  const bindingCli = spawnSync(process.execPath, [guardPath, '--context-file', manifestPath, '--verify-binding', '--binding-file', bindingPath], { encoding: 'utf8' });
+  assert(bindingCli.status === 0 && JSON.parse(bindingCli.stdout).code === 'EXTERNAL_IDENTITY_BOUND', 'CLI verify-binding should align with the live observed branch/HEAD');
+  await writeFile(bindingPath, JSON.stringify({ ...alignedBinding, observedHeadSha: '0'.repeat(40) }), 'utf8');
+  const bindingMismatchCli = spawnSync(process.execPath, [guardPath, '--context-file', manifestPath, '--verify-binding', '--binding-file', bindingPath], { encoding: 'utf8' });
+  assert(bindingMismatchCli.status === 2 && JSON.parse(bindingMismatchCli.stdout).code === 'EXTERNAL_IDENTITY_HEAD_MISMATCH', 'CLI verify-binding must stop on HEAD mismatch');
+  const bindingCombinedCli = spawnSync(process.execPath, [guardPath, '--context-file', manifestPath, '--verify-binding', '--binding-file', bindingPath, '--render'], { encoding: 'utf8' });
+  assert(bindingCombinedCli.status === 2 && JSON.parse(bindingCombinedCli.stdout).code === 'PROJECT_CONTEXT_ARGUMENT_INVALID', '--verify-binding must reject combination with --render');
   const turnStatePath = join(temp, 'turn-state.json');
   const alignedTurnState = { schemaVersion:1, activeProjectContextId:'delivery-billing-v1', activeContextFingerprint:BASE_FINGERPRINT, candidateProjectContextId:'delivery-billing-v1', candidateContextFingerprint:BASE_FINGERPRINT, continuationMode:'IMPLICIT' };
   await writeFile(turnStatePath, JSON.stringify(alignedTurnState), 'utf8');

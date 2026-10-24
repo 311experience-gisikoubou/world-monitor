@@ -46,6 +46,7 @@ const materialChangeReviewed = argValue('--material-change-reviewed').toLowerCas
 const forcedReflectionReviewed = argValue('--forced-reflection-reviewed').toLowerCase();
 const reflectionRecorded = argValue('--reflection-recorded').toLowerCase();
 const reflectionBasis = argValue('--reflection-basis').toLowerCase();
+const executionClass = argValue('--execution-class', 'standard').toLowerCase();
 const executionOutcome = argValue('--execution-outcome', 'not-applicable').toLowerCase();
 const timedOutProcessState = argValue('--timed-out-process-state', 'not-applicable').toLowerCase();
 const recoveryScope = argValue('--recovery-scope', 'not-applicable').toLowerCase();
@@ -85,6 +86,7 @@ const allowedReflectionBases = new Set([
   'materially-changed-condition',
   'insufficient-observation',
 ]);
+const allowedExecutionClasses = new Set(['standard', 'short-command', 'long-running']);
 const allowedExecutionOutcomes = new Set(['not-applicable', 'running', 'success', 'failure', 'timeout']);
 const allowedTimedOutProcessStates = new Set(['not-applicable', 'running', 'exited', 'unknown']);
 const allowedRecoveryScopes = new Set(['not-applicable', 'poll-existing', 'failed-only', 'split-command', 'whole-phase', 'root-cause-analysis', 'route-reselection']);
@@ -147,6 +149,7 @@ if (!hasSameClassFailureCount || !Number.isInteger(sameClassFailureCount) || sam
   add('STOP', 'SAME_CLASS_FAILURE_COUNT_REQUIRED');
 }
 if (!allowedPostFailureActions.has(postFailureAction)) add('STOP', 'POST_FAILURE_ACTION_REQUIRED');
+if (!allowedExecutionClasses.has(executionClass)) add('STOP', 'EXECUTION_CLASS_INVALID');
 if (!allowedExecutionOutcomes.has(executionOutcome)) add('STOP', 'EXECUTION_OUTCOME_INVALID');
 if (!allowedTimedOutProcessStates.has(timedOutProcessState)) add('STOP', 'TIMED_OUT_PROCESS_STATE_INVALID');
 if (!allowedRecoveryScopes.has(recoveryScope)) add('STOP', 'RECOVERY_SCOPE_INVALID');
@@ -157,6 +160,9 @@ if (aiOnly) {
   const humanFieldsPresent = [humanProfile, humanRole, technicalJudgmentOwner, instructionMode].some(Boolean);
   if (humanFieldsPresent || estimatedUserMinutes !== 0 || estimatedUserSteps !== 0 || workImpact !== 'none' || scheduledWindow !== 'no' || scope !== 'local-dev') {
     add('STOP', 'AI_ONLY_HUMAN_OPERATION_CONFLICT');
+  }
+  if (executionClass === 'short-command' && executionOutcome === 'running') {
+    add('STOP', 'SHORT_COMMAND_STILL_RUNNING_TERMINATE_AND_INSPECT', { executionClass, executionOutcome });
   }
 }
 
@@ -169,7 +175,9 @@ if (executionOutcome === 'timeout') {
   if (timedOutProcessState === 'unknown') {
     add('STOP', 'TIMEOUT_PROCESS_STATE_UNKNOWN_INSPECT_REQUIRED');
   }
-  if (timedOutProcessState === 'running' && recoveryScope !== 'poll-existing') {
+  if (timedOutProcessState === 'running' && executionClass === 'short-command') {
+    add('STOP', 'SHORT_COMMAND_TIMEOUT_TERMINATE_AND_INSPECT', { executionClass, recoveryScope });
+  } else if (timedOutProcessState === 'running' && recoveryScope !== 'poll-existing') {
     add('STOP', 'TIMEOUT_PROCESS_STILL_RUNNING_POLL_REQUIRED', { recoveryScope });
   }
   if (timedOutProcessState === 'exited' && recoveryScope === 'poll-existing') {
@@ -357,6 +365,7 @@ if (!findings.some((f) => f.status === 'STOP')) {
     forcedReflectionReviewed: sameClassFailureCount >= 2 && postFailureAction === 'retry-materially-changed' ? forcedReflectionReviewed : null,
     reflectionRecorded: sameClassFailureCount >= 2 && postFailureAction === 'retry-materially-changed' ? reflectionRecorded : null,
     reflectionBasis: sameClassFailureCount >= 2 && postFailureAction === 'retry-materially-changed' ? reflectionBasis : null,
+    executionClass,
     executionOutcome,
     timedOutProcessState: executionOutcome === 'timeout' ? timedOutProcessState : null,
     recoveryScope: executionOutcome === 'timeout' ? recoveryScope : null,
@@ -394,6 +403,7 @@ const output = {
   forcedReflectionReviewed: forcedReflectionReviewed || null,
   reflectionRecorded: reflectionRecorded || null,
   reflectionBasis: reflectionBasis || null,
+  executionClass,
   executionOutcome,
   timedOutProcessState,
   recoveryScope,

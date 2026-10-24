@@ -5,8 +5,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { readBoundedTaskInput } from './implementation-runner.mjs';
-import { validateResearchEnvelopeShape } from './research-gate.mjs';
-import { validateInstructionClarityInput } from './instruction-clarity-gate.mjs';
+import { validateResearchEnvelopeShape, evaluateResearchEnvelope, blocksSourceWrite } from './research-gate.mjs';
+import { validateInstructionClarityInput, evaluateInstructionClarity } from './instruction-clarity-gate.mjs';
 
 // `../project-intake/project-intake-gate.mjs` (and its own transitive
 // chain: implementation-orchestrator.mjs, human-decision-sync.mjs, ...) is
@@ -28,10 +28,38 @@ const RESEARCH_META_TAG = 'AGENT_CYCLE_JOB_RESEARCH_V1';
 const ACTIONS = new Set(['PREPARE', 'RESUME']);
 const PREPARE_KEYS = new Set(['schemaVersion', 'action', 'cycleResult']);
 const RESUME_KEYS = new Set(['schemaVersion', 'action', 'currentFocus', 'workState', 'issueBody']);
+// Every real runAgentCycle() EXECUTE/LONG_TASK HANDOFF result (agent-
+// cycle.mjs) now also carries `dependencyCheckpoints` (the prerequisite-
+// chain checkpoint list -- unused here, forwarded as inert data only) and
+// the fixed, non-judgmental `AI_CYCLE_CONTINUATION_MARKER` (terminalState /
+// responseMayTerminate / turnCloseReceipt / handoffClass). Both are closed-
+// object members of the ACTUAL cycle shape this bridge receives, so both
+// must be accepted here -- never stripped silently and never re-derived --
+// or every genuine HANDOFF cycle fails closed on cycle_schema_invalid before
+// the marker itself can even be checked below.
 const CYCLE_KEYS = new Set([
   'schemaVersion', 'result', 'code', 'goalId', 'currentNextStep',
-  'selected', 'orchestrationTask', 'authority',
+  'selected', 'orchestrationTask', 'authority', 'dependencyCheckpoints',
+  'terminalState', 'responseMayTerminate', 'turnCloseReceipt', 'handoffClass',
 ]);
+// The exact, fixed, non-judgmental continuation marker agent-cycle.mjs
+// stamps on every HANDOFF (and every other non-terminal) result. This
+// bridge never decides pause/stagnation/terminal state itself -- that
+// judgment belongs solely to stagnation-watch.mjs -- so this is NOT a
+// second stagnation gate; it only mechanically REQUIRES the one safe,
+// fixed, already-defined marker shape to be present verbatim on every real
+// HANDOFF cycle it accepts. An absent, partial (some-but-not-all keys), or
+// mismatched/forged marker (e.g. a smuggled terminalState other than
+// 'AI_CONTINUES', or responseMayTerminate:true) must fail closed here
+// instead of ever being treated as, or silently reclassified toward, a
+// human-approved/PRE_MERGE_READY/auto-merge terminal state.
+const CYCLE_CONTINUATION_MARKER = Object.freeze({
+  terminalState: 'AI_CONTINUES',
+  responseMayTerminate: false,
+  turnCloseReceipt: null,
+  handoffClass: 'AI_OWNED',
+});
+const CYCLE_CONTINUATION_MARKER_KEYS = Object.keys(CYCLE_CONTINUATION_MARKER);
 const SELECTED_KEYS = new Set([
   'id', 'priority', 'executionMode', 'taskId', 'expectedNextStep', 'onSuccessNextStep',
 ]);
@@ -189,6 +217,26 @@ function validatePrepareCycle(cycle) {
   } else if (cycle.selected?.taskId !== cycle.orchestrationTask.taskId) {
     errors.push('cycle_taskId_mismatch');
   }
+
+  // dependencyCheckpoints is always present on a real agent-cycle.mjs
+  // HANDOFF (empty array when no candidate has an unmet prerequisite). It
+  // is never read or acted on by this bridge -- only forwarded as inert
+  // data -- so it is bounded to "array" here rather than given a second,
+  // duplicate deep schema already owned by agent-cycle.mjs.
+  if (!Array.isArray(cycle.dependencyCheckpoints)) {
+    errors.push('cycle_dependencyCheckpoints_invalid');
+  }
+
+  // The fixed non-terminal continuation marker must be present verbatim:
+  // absent, partial (any one of the four keys missing), or mismatched
+  // (forged) all fail the same closed check. This is a structural presence/
+  // equality check only -- it never evaluates or re-derives pause/
+  // stagnation/terminal judgment itself.
+  if (CYCLE_CONTINUATION_MARKER_KEYS.some((key) => !(key in cycle)
+    || cycle[key] !== CYCLE_CONTINUATION_MARKER[key])) {
+    errors.push('cycle_continuation_marker_invalid');
+  }
+
   return errors;
 }
 
@@ -217,6 +265,40 @@ export function prepareAiJobIssue(cycleResult, dependencies = {}) {
   const clarityShapeErrors = validateInstructionClarityInput(cycleResult.orchestrationTask.instructionClarity);
   if (clarityShapeErrors.length > 0) {
     return stop('AGENT_JOB_BRIDGE_INSTRUCTION_CLARITY_INVALID', { errors: clarityShapeErrors });
+  }
+
+  // Shape-valid evidence is not the same as QUALIFIED evidence: a task must
+  // never reach QUEUED on the strength of a well-formed envelope alone. The
+  // expected taskId/repository/scope binding is derived strictly from this
+  // task's own already-validated orchestrationTask fields -- never from the
+  // embedded research.context, which must not be trusted to supply its own
+  // expected values. evaluateResearchEnvelope independently recomputes the
+  // raw Research Gate evidence against that binding (rejecting a stale,
+  // wrong-task/repository/scope/constraints, or otherwise invalid
+  // evaluation) and blocksSourceWrite applies the SAME downstream policy the
+  // runner uses, so a legitimate ADOPT/BYPASS_LIGHT, or an explicitly
+  // authorized bounded synthetic TRIAL, still proceeds while every other
+  // outcome (REJECT/STOP/unauthorized TRIAL) fails closed here instead of
+  // only at the downstream runner.
+  const researchGate = evaluateResearchEnvelope(cycleResult.orchestrationTask.research, {
+    taskId: cycleResult.orchestrationTask.taskId,
+    repository: cycleResult.orchestrationTask.repository,
+    scope: cycleResult.orchestrationTask.allowedScope,
+  });
+  if (blocksSourceWrite(researchGate, {
+    trialWriteMode: cycleResult.orchestrationTask.trialWriteMode,
+    dataClass: cycleResult.orchestrationTask.dataClass,
+  })) {
+    return stop('AGENT_JOB_BRIDGE_RESEARCH_GATE_BLOCKED', { researchGate });
+  }
+
+  // Instruction clarity is likewise independently re-evaluated here (never
+  // trusted merely because it was shape-valid): an unresolved material
+  // ambiguity or an unlisted-assumption flag must stop this task before an
+  // Issue/label is ever emitted.
+  const instructionClarity = evaluateInstructionClarity(cycleResult.orchestrationTask.instructionClarity);
+  if (instructionClarity.result !== 'PROCEED') {
+    return stop('AGENT_JOB_BRIDGE_INSTRUCTION_CLARITY_NOT_CONFIRMED', { instructionClarity });
   }
 
   const title = cleanText(cycleResult.orchestrationTask.objective, 200);

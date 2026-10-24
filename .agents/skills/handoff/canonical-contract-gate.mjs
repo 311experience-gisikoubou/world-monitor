@@ -11,6 +11,7 @@ import { normalizeDesignGovernance, validateCanonicalPromotionGate } from './can
 const STATUSES = new Set(['CURRENT','SUPERSEDED','HISTORICAL','DRAFT']);
 const KINDS = new Set(['PROJECT','BUSINESS','DESIGN','SECURITY','WORKFLOW','GOVERNANCE']);
 const BASELINES = new Set(['MACHINE_READABLE','REFERENCE_IMAGE']);
+const TASK_TYPES = new Set(['UI','UI_REFERENCE_REPRODUCTION','BACKEND_API','DB_SCHEMA','CLI_SCRIPT','GENERATED_ARTIFACT','DOCS_CONFIG','FOUNDATION_GOVERNANCE']);
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,159}$/;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
@@ -98,12 +99,21 @@ export function validateCanonicalContract(manifest,stateInput=null){
   const {value:c,byId,currentBySlot}=normalized;
   const summary={repository:c.repository,contractId:c.contractId,contractVersion:c.contractVersion,contractFingerprint:canonicalContractFingerprint(c),canonicalTargets:[...currentBySlot.values()].map(a=>({slot:a.slot,artifactId:a.id,kind:a.kind,sources:a.sources})).sort((a,b)=>a.slot.localeCompare(b.slot)),supersededSpecUsed:false};
   if(stateInput===null||stateInput===undefined)return pass(summary);
-  const allowed=['schemaVersion','repository','contractId','contractVersion','targetSelection','usedSpecIds','functionalGate'];
-  if(!exactKeys(stateInput,allowed)||stateInput.schemaVersion!==1||Object.keys(stateInput).length!==allowed.length)return stop('CANONICAL_WORK_STATE_INVALID','Contract conformance state must use the closed schemaVersion=1 shape.');
+  const requiredKeys=['schemaVersion','repository','contractId','contractVersion','targetSelection','usedSpecIds','functionalGate'];
+  const optionalKeys=['taskTypes'];
+  const presentKeys=isObject(stateInput)?Object.keys(stateInput):null;
+  if(!presentKeys||stateInput.schemaVersion!==1||!presentKeys.every(k=>requiredKeys.includes(k)||optionalKeys.includes(k))||!requiredKeys.every(k=>presentKeys.includes(k)))
+    return stop('CANONICAL_WORK_STATE_INVALID','Contract conformance state must use the closed schemaVersion=1 shape (taskTypes is the only optional field).');
   const repository=cleanRepo(stateInput.repository),contractId=cleanId(stateInput.contractId),contractVersion=cleanText(stateInput.contractVersion,80);
   if(repository!==c.repository)return stop('CANONICAL_CONTRACT_REPOSITORY_MISMATCH','Work state references a different repository contract.',{expectedRepository:c.repository,actualRepository:repository});
   if(contractId!==c.contractId||contractVersion!==c.contractVersion)return stop('CANONICAL_CONTRACT_VERSION_MISMATCH','Work state contract ID/version is not current.',{expectedContractId:c.contractId,expectedContractVersion:c.contractVersion});
   if(!['PASS','FAIL','UNNEEDED'].includes(stateInput.functionalGate))return stop('CANONICAL_WORK_STATE_INVALID','functionalGate must be PASS, FAIL, or UNNEEDED.');
+  let taskTypes=null;
+  if(stateInput.taskTypes!==undefined){
+    const t=stringList(stateInput.taskTypes,{max:TASK_TYPES.size,ids:true});
+    if(!t||t.length<1||!t.every(x=>TASK_TYPES.has(x)))return stop('CANONICAL_WORK_STATE_INVALID','taskTypes must be a non-empty unique bounded list of known task types.');
+    taskTypes=t;
+  }
   if(!Array.isArray(stateInput.targetSelection)||stateInput.targetSelection.length<1||stateInput.targetSelection.length>50)return stop('CANONICAL_WORK_STATE_INVALID','At least one targetSelection entry is required.');
   const selections=[];
   for(const row of stateInput.targetSelection){if(!exactKeys(row,['slot','artifactId'])||Object.keys(row).length!==2)return stop('CANONICAL_WORK_STATE_INVALID','Each targetSelection must contain only slot and artifactId.');const slot=cleanId(row.slot),artifactId=cleanId(row.artifactId);if(!slot||!artifactId||selections.some(x=>x.slot===slot))return stop('CANONICAL_WORK_STATE_INVALID','Target selections must have unique valid slots.');selections.push({slot,artifactId});}
@@ -111,8 +121,13 @@ export function validateCanonicalContract(manifest,stateInput=null){
   if(!used)return stop('CANONICAL_WORK_STATE_INVALID','usedSpecIds must be a unique bounded artifact ID list.');
   for(const {slot,artifactId} of selections){const current=currentBySlot.get(slot);if(!current||current.id!==artifactId)return stop('CANONICAL_TARGET_MISMATCH','Implementation target does not match the CURRENT canonical artifact.',{slot,expectedArtifactId:current?.id??null,implementationArtifactId:artifactId,functionalGate:stateInput.functionalGate});if(!used.includes(artifactId))return stop('CANONICAL_SPEC_NOT_USED','The selected CURRENT canonical artifact is not present in usedSpecIds.',{slot,artifactId});}
   for(const id of used){const a=byId.get(id);if(!a)return stop('CANONICAL_SPEC_UNKNOWN','Work state references an artifact that is not in the canonical contract.',{artifactId:id});if(a.status==='SUPERSEDED')return stop('SUPERSEDED_SPEC_USED','A SUPERSEDED artifact cannot be used as implementation authority.',{artifactId:id,supersededBy:a.supersededBy,functionalGate:stateInput.functionalGate});if(a.status!=='CURRENT')return stop('NONCURRENT_SPEC_USED','Only CURRENT artifacts may be used as implementation authority.',{artifactId:id,status:a.status,functionalGate:stateInput.functionalGate});}
+  const referenceImageArtifactIds=[...new Set([...selections.map(x=>x.artifactId),...used])].filter(id=>{const a=byId.get(id);return Boolean(a)&&a.kind==='DESIGN'&&a.visual?.baseline==='REFERENCE_IMAGE';}).sort();
+  if(referenceImageArtifactIds.length>0){
+    if(!taskTypes)return stop('UI_REFERENCE_REPRODUCTION_CLASSIFICATION_REQUIRED','A selected or used CURRENT REFERENCE_IMAGE design requires an explicit taskTypes classification that includes UI_REFERENCE_REPRODUCTION.',{referenceImageArtifactIds,functionalGate:stateInput.functionalGate});
+    if(!taskTypes.includes('UI_REFERENCE_REPRODUCTION'))return stop('UI_REFERENCE_REPRODUCTION_MISCLASSIFIED','taskTypes omits UI_REFERENCE_REPRODUCTION even though a CURRENT REFERENCE_IMAGE design is selected or used; plain UI/functional classification is not sufficient.',{referenceImageArtifactIds,taskTypes,functionalGate:stateInput.functionalGate});
+  }
   if(stateInput.functionalGate==='FAIL')return stop('FUNCTIONAL_GATE_FAIL','Functional Gate is not PASS/UNNEEDED; merge preparation cannot proceed.');
-  return pass({...summary,functionalGate:stateInput.functionalGate,targetSelection:selections,usedSpecIds:used});
+  return pass({...summary,functionalGate:stateInput.functionalGate,targetSelection:selections,usedSpecIds:used,...(taskTypes?{taskTypes}:{})});
 }
 
 function verifyUiReferenceSources(root,contract){

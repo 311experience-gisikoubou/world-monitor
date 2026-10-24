@@ -108,6 +108,35 @@ function baseAdapter(id, provider, capacity = unavailableCapacity()) {
 function pushReason(target, condition, code) {
   if (condition) target.push(code);
 }
+
+// Codex Cloud is distinct from the Windows Codex CLI sandbox. This is a
+// read-only diagnostic, NOT a Cloud task issuer or qualification receipt.
+// A caller-supplied "true" is never an authenticated attestation.
+export function summarizeCodexCloudReadiness(observed = {}) {
+  const safe = observed && typeof observed === 'object' && !Array.isArray(observed)
+    ? observed : {};
+  const checks = [
+    ['environmentBindingObserved', 'CLOUD_ENV_BINDING_UNVERIFIED'],
+    ['repositorySourceAndHistoryAudited', 'CLOUD_REPOSITORY_SCOPE_UNVERIFIED'],
+    ['cloudCredentialAndNetworkBoundaryAudited', 'CLOUD_PRIVACY_BOUNDARY_UNVERIFIED'],
+    ['accountAutoTopupDisabledObserved', 'CLOUD_AUTOTOPUP_UNVERIFIED'],
+    ['accountPaidCreditsDisabledObserved', 'CLOUD_PAID_CREDITS_UNVERIFIED'],
+    ['quotaExhaustionFailClosedObserved', 'CLOUD_QUOTA_STOP_UNVERIFIED'],
+    ['authenticatedWriterProvenanceAvailable', 'CLOUD_WRITER_PROVENANCE_MISSING'],
+  ];
+  const blockers = checks.filter(([key]) => safe[key] !== true).map(([, code]) => code);
+  // Even when metadata asserts every check, it is not independently
+  // authenticated. Actual qualification belongs to the existing provider
+  // and implementation-route receipts, NEVER this diagnostics object.
+  if (blockers.length === 0) blockers.push('CLOUD_ATTESTATION_NOT_INDEPENDENTLY_VERIFIED');
+  return {
+    status: 'UNQUALIFIED',
+    dispatchAuthorized: false,
+    executionEnvironment: 'codex-cloud',
+    blockers,
+  };
+}
+
 export function buildReadiness({
   codex, claude, codexDoctor, codexSupport, claudeAuth, claudeSupport,
   gemini, antigravity, openAiApiKeyPresent,
@@ -175,6 +204,7 @@ export function buildReadiness({
           : codexDoctor?.deniedReadRestrictions === false ? 'NOT_ENFORCED' : 'UNKNOWN',
         blockers: codexBlockers,
       },
+      codexCloud: summarizeCodexCloudReadiness(),
       claude: {
         authState: claudeAuthOk ? 'VERIFIED' : 'UNKNOWN',
         safeModeFlagsSupported: claudeSupportOk,

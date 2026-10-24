@@ -88,6 +88,20 @@ process.stdin.on('end', () => {
     console.log(JSON.stringify({ result: 'FAILED', code: 'WORKTREE_NOT_CLEAN' }));
     process.exit(1);
   }
+  if (process.env.SELFTEST_MODE === 'capacity-clean') {
+    // Narrow Claude plan usage/rate-limit stop with no source changes left behind.
+    console.log(JSON.stringify({ result: 'FAILED', code: 'PROVIDER_CAPACITY_UNAVAILABLE' }));
+    process.exit(1);
+  }
+  if ((process.env.SELFTEST_MODE || '').startsWith('capacity-dirty')) {
+    // Same capacity stop, but a partial edit was left uncommitted before the limit hit.
+    fs.writeFileSync('src/partial.js', 'partial edit before capacity hit\n');
+    if (process.env.SELFTEST_MODE === 'capacity-dirty-outscope') fs.writeFileSync('outside.js', 'bad\n');
+    if (process.env.SELFTEST_MODE === 'capacity-dirty-secret') fs.writeFileSync('src/.env.json', 'secret\n');
+    if (process.env.SELFTEST_MODE === 'capacity-dirty-delete') fs.unlinkSync('src/.keep');
+    console.log(JSON.stringify({ result: 'FAILED', code: 'PROVIDER_CAPACITY_UNAVAILABLE' }));
+    process.exit(1);
+  }
   fs.mkdirSync('.ai-jobs', { recursive: true });
   let n = 0;
   try { n = parseInt(fs.readFileSync('.ai-jobs/counter.txt', 'utf8'), 10) || 0; } catch {}
@@ -224,6 +238,30 @@ try {
     Check ($r.Status.state -eq 'GATE_FAILED' -and $r.Status.retry_stop_code -eq 'RETRY_CHECKPOINT_FAILED') 'checkpoint failure fails closed with RETRY_CHECKPOINT_FAILED'
     Check ($r.OrchCalls -eq 1 -and $r.Commits -eq 0 -and $r.Status.attempt -eq 1) 'checkpoint failure => no further implementation attempt, no commit'
     Check (-not (Test-Path (Join-Path $r.JobDir 'DONE'))) 'checkpoint failure => no DONE'
+
+    $r = Invoke-Scenario 'capacity-clean' 'capacity-clean'
+    Check ($r.Status.state -eq 'WAIT_PROVIDER' -and $r.Status.retry_stop_code -eq 'PROVIDER_CAPACITY_UNAVAILABLE') 'clean provider capacity stop => WAIT_PROVIDER'
+    Check (-not (Test-Path (Join-Path $r.JobDir 'DONE'))) 'provider capacity wait => no DONE'
+    Check ($r.Status.attempt -eq 1 -and $r.Status.auto_retries_used -eq 0) 'provider capacity wait => no auto retry attempted'
+    Check ($r.Commits -eq 0 -and @($r.DirtyNow).Count -eq 0) 'provider capacity wait => worktree stays clean, no checkpoint'
+    Check (-not (Test-Path (Join-Path $r.JobDir 'test.log'))) 'provider capacity wait => normal test gate is skipped entirely'
+    Check ($r.Result.attempts[0].final_state -eq 'WAIT_PROVIDER') 'provider capacity wait reflected in attempts summary'
+
+    $r = Invoke-Scenario 'capacity-dirty' 'capacity-dirty'
+    Check ($r.Status.state -eq 'WAIT_PROVIDER' -and $r.Status.retry_stop_code -eq 'PROVIDER_CAPACITY_DIRTY_SOURCE_PRESERVED') 'bounded dirty source parks in WAIT_PROVIDER'
+    Check (-not (Test-Path (Join-Path $r.JobDir 'DONE'))) 'dirty provider capacity stop => no DONE'
+    Check ($r.Status.attempt -eq 1 -and $r.Status.auto_retries_used -eq 0) 'dirty provider capacity stop => no auto retry attempted'
+    Check ($r.Commits -eq 0) 'dirty provider capacity stop => no checkpoint commit or push during quota stop'
+    Check ((@($r.DirtyNow) -join ' ') -match 'partial\.js') 'dirty provider capacity stop => uncommitted source changes are left untouched, not discarded'
+    Check (-not (Test-Path (Join-Path $r.JobDir 'test.log'))) 'dirty provider capacity stop => normal test gate skipped entirely'
+    foreach ($mode in @('capacity-dirty-outscope','capacity-dirty-secret','capacity-dirty-delete')) {
+        $r = Invoke-Scenario $mode $mode
+        Check ($r.Status.state -eq 'CLAUDE_FAILED' -and $r.Status.retry_stop_code -eq 'PROVIDER_CAPACITY_WITH_SOURCE_CHANGES') "$mode remains fail closed"
+        Check ($r.Commits -eq 0 -and -not (Test-Path (Join-Path $r.JobDir 'DONE'))) "$mode never checkpoints or marks ready"
+    }
+    $r = Invoke-Scenario 'capacity-dirty-branch' 'capacity-dirty' 'some-other-branch'
+    Check ($r.Status.state -eq 'CLAUDE_FAILED' -and $r.Status.retry_stop_code -eq 'PROVIDER_CAPACITY_WITH_SOURCE_CHANGES') 'branch mismatch stops'
+    Check ($r.Commits -eq 0) 'branch mismatch makes zero commits'
 } finally {
     Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
 }

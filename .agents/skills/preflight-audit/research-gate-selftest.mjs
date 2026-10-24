@@ -12,6 +12,7 @@ const {
   validateResearchGateInput,
   computeConstraintsDigest,
   blocksSourceWrite,
+  BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE,
   CHECKLIST_IDS,
   MINIMAL_BYPASS_CHECKLIST_IDS,
   TRIGGER_KEYS,
@@ -587,6 +588,19 @@ function aiBasicResearcher(researcherId = 'provider-a', researchSessionRef = 're
   assert(result.trialAuthorization.scope === 'SYNTHETIC_BOUNDED_MINIMAL_ONLY', 'trial must be synthetic/bounded/minimal only');
   assert(result.trialAuthorization.generalImplementationAuthorized === false, 'trial must never authorize general implementation');
   assert(result.trialAuthorization.realDataPermitted === false, 'trial must never permit real data');
+  assert(blocksSourceWrite(result), 'TRIAL_REQUIRED without an explicit trial mode must block source write');
+  assert(!blocksSourceWrite(result, { trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE, dataClass: 'synthetic' }),
+    'TRIAL_REQUIRED with exact trial mode and synthetic data must allow only bounded trial source write');
+  assert(blocksSourceWrite(result, { trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE, dataClass: 'source-only' }),
+    'trial mode must block source-only data class');
+  assert(blocksSourceWrite(result, { trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE, dataClass: 'public' }),
+    'trial mode must block public data class');
+  assert(blocksSourceWrite({ ...result, result: 'REJECT' }, { trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE, dataClass: 'synthetic' }),
+    'trial mode must not turn REJECT into trial authorization');
+  assert(blocksSourceWrite({ ...result, result: 'UNKNOWN' }, { trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE, dataClass: 'synthetic' }),
+    'trial mode must not turn UNKNOWN into trial authorization');
+  assert(blocksSourceWrite({ ...result, trialAuthorization: { ...result.trialAuthorization, permitted: false } }, { trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE, dataClass: 'synthetic' }),
+    'malformed or withdrawn trial authorization must block source write');
 }
 
 // --- Security/privacy UNKNOWN never permits real data (flag surfaced even on an otherwise clean matrix) ---
@@ -918,4 +932,102 @@ function aiBasicResearcher(researcherId = 'provider-a', researchSessionRef = 're
   ] }).code === 'TOP_CONDITION_DROPPED_OR_REPLACED', 'full human condition criterion must be identity-bound');
 }
 
+// Strict human top conditions must block unknown external costs and
+// privacy even for bounded synthetic source-writing trials.
+{
+  const external = {
+    triggers: triggersWith('newCloudApiServiceAppLibraryCliAccount', 'feeOrFreeQuota'),
+    newCloudApiServiceAppLibraryCliAccountRiskProfile: 'EXTERNAL_OR_HIGH_RISK',
+    noTriggerAssessment: null,
+    deepResearch: deepResearchEvidence('provider-a', 'provider-b'),
+  };
+  const cost = evaluate(baseInput({
+    ...external,
+    evidenceBinding: binding({ constraints: ['zero-additional-cost'] }),
+    checklist: fullChecklist({ automaticBilling: { status: 'UNKNOWN' } }),
+    humanTopConditions: [{ id: 'ZERO_ADDITIONAL_COST', active: true, statement: 'No extra payments.' }],
+  }));
+  assert(cost.result === 'STOP' && cost.code === 'EXTERNAL_ZERO_COST_EVIDENCE_UNKNOWN',
+    'unknown external automatic billing must STOP rather than authorize synthetic trial');
+  assert(cost.trialAuthorization.permitted === false &&
+    blocksSourceWrite(cost, { trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE, dataClass: 'synthetic' }),
+    'unknown external billing must not permit synthetic source-write');
+  const privacy = evaluate(baseInput({
+    ...external,
+    evidenceBinding: binding({ constraints: ['no-protected-data'] }),
+    checklist: fullChecklist({ privacy: { status: 'UNKNOWN' } }),
+    humanTopConditions: [{ id: 'NO_PROTECTED_DATA_PERMITTED', active: true, statement: 'Never send protected data.' }],
+  }));
+  assert(privacy.result === 'STOP' && privacy.code === 'EXTERNAL_PROTECTED_DATA_BOUNDARY_UNKNOWN',
+    'unknown external privacy must STOP rather than authorize synthetic trial');
+  assert(privacy.trialAuthorization.permitted === false &&
+    blocksSourceWrite(privacy, { trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE, dataClass: 'synthetic' }),
+    'unknown external privacy must not permit synthetic source-write');
+  const preexistingExternal = evaluate(baseInput({
+    triggers: triggersWith('authNetworkPrivacySecurityEncryptionBackupStorageChange', 'feeOrFreeQuota'),
+    noTriggerAssessment: null,
+    checklist: fullChecklist({ automaticBilling: { status: 'UNKNOWN' } }),
+    humanTopConditions: [{ id: 'ZERO_ADDITIONAL_COST', active: true, statement: 'No extra payments.' }],
+    deepResearch: deepResearchEvidence('provider-a', 'provider-b'),
+  }));
+  assert(preexistingExternal.result === 'STOP' && preexistingExternal.code === 'EXTERNAL_ZERO_COST_EVIDENCE_UNKNOWN',
+    'already-used external network+billing changes cannot bypass strict zero-cost STOP');  const networkOnly = evaluate(baseInput({
+    triggers: triggersWith('authNetworkPrivacySecurityEncryptionBackupStorageChange'),
+    noTriggerAssessment: null,
+    checklist: fullChecklist({ privacy: { status: 'UNKNOWN' } }),
+    humanTopConditions: [{ id: 'NO_PROTECTED_DATA_PERMITTED', active: true, statement: 'Never send protected data.' }],
+    deepResearch: deepResearchEvidence('provider-a', 'provider-b'),
+  }));
+  assert(networkOnly.result === 'STOP' && networkOnly.code === 'EXTERNAL_PROTECTED_DATA_BOUNDARY_UNKNOWN',
+    'existing external network/privacy-only changes cannot bypass the protected-data STOP');
+
+  const networkCost = evaluate(baseInput({
+    triggers: triggersWith('authNetworkPrivacySecurityEncryptionBackupStorageChange'),
+    noTriggerAssessment: null,
+    checklist: fullChecklist({ automaticBilling: { status: 'UNKNOWN' } }),
+    humanTopConditions: [{ id: 'ZERO_ADDITIONAL_COST', active: true, statement: 'No extra payments.' }],
+    deepResearch: deepResearchEvidence('provider-a', 'provider-b'),
+  }));
+  assert(networkCost.result === 'STOP' && networkCost.code === 'EXTERNAL_ZERO_COST_EVIDENCE_UNKNOWN',
+    'existing network-only changes cannot bypass unknown-cost STOP');
+  const ordinary = evaluate(baseInput({
+    ...external,
+    checklist: fullChecklist({ automaticBilling: { status: 'UNKNOWN' } }),
+    humanTopConditions: [],
+  }));
+  assert(ordinary.result === 'TRIAL_REQUIRED' && ordinary.trialAuthorization.permitted === true,
+    'ordinary bounded synthetic trial remains available without strict human top conditions');
+}
+// An existing service can change fees without a new-service or network trigger.
+// Under ZERO_ADDITIONAL_COST, UNKNOWN billing or free-tier behavior must STOP
+// even a bounded synthetic write; do not rely only on externalServiceRisk.
+{
+  const feeOnly = triggersWith('feeOrFreeQuota');
+  for (const unknownField of ['automaticBilling', 'freeTierExceedBehavior', 'additionalCost']) {
+    const result = evaluate(baseInput({
+      triggers: feeOnly,
+      noTriggerAssessment: null,
+      checklist: fullChecklist({ [unknownField]: { status: 'UNKNOWN' } }),
+      humanTopConditions: [{ id: 'ZERO_ADDITIONAL_COST', active: true, statement: 'No extra payments.' }],
+      deepResearch: deepResearchEvidence('provider-a', 'provider-b'),
+    }));
+    assert(result.result === 'STOP' && result.code === 'EXTERNAL_ZERO_COST_EVIDENCE_UNKNOWN',
+      `fee-only UNKNOWN ${unknownField} must STOP instead of permitting synthetic cloud trial`);
+    assert(result.trialAuthorization.permitted === false &&
+      blocksSourceWrite(result, { trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE, dataClass: 'synthetic' }),
+      `fee-only UNKNOWN ${unknownField} must deny source-write`);
+  }
+  const clear = evaluate(baseInput({
+    triggers: feeOnly, noTriggerAssessment: null, checklist: fullChecklist(),
+    humanTopConditions: [{ id: 'ZERO_ADDITIONAL_COST', active: true, statement: 'No extra payments.' }],
+    deepResearch: deepResearchEvidence('provider-a', 'provider-b'),
+  }));
+  assert(clear.result === 'ADOPT', 'verified fee-only case must retain ADOPT');
+  const noTop = evaluate(baseInput({
+    triggers: feeOnly, noTriggerAssessment: null,
+    checklist: fullChecklist({ automaticBilling: { status: 'UNKNOWN' } }),
+    humanTopConditions: [], deepResearch: deepResearchEvidence('provider-a', 'provider-b'),
+  }));
+  assert(noTop.result === 'TRIAL_REQUIRED', 'ordinary fee-only trial without absolute top condition remains unchanged');
+}
 console.log('research-gate selftest: PASS');

@@ -10,8 +10,8 @@ const identity = {
   projectContextObserved: 'app-v1',
   workTargetExpected: 'screen-a',
   workTargetObserved: 'screen-a',
-  executionSurfaceExpected: 'tauri-dev',
-  executionSurfaceObserved: 'tauri-dev',
+  executionSurfaceExpected: 'web-browser',
+  executionSurfaceObserved: 'web-browser',
 };
 const authority = { state: 'CURRENT', source: 'REPO_LOCAL', reference: 'PROJECT_CONTEXT.json#screen-a' };
 const actors = { implementerId: 'impl', judgeId: 'judge' };
@@ -65,8 +65,8 @@ function base(overrides = {}) {
     stateId: G,
     generatedAt: new Date().toISOString(),
     stagedRealityReceipt: finalReality,
-    expectedSurface: 'tauri',
-    observedSurface: 'tauri',
+    expectedSurface: 'web-browser',
+    observedSurface: 'web-browser',
     environment: 'dev',
     runtime: {
       applicationSurfaceConfirmed: true,
@@ -108,8 +108,13 @@ assert.match(result.receiptId, /^[0-9a-f]{64}$/);
 assert.equal(result.requiredRegions.find(x => x.id === 'list').overflowY, 220);
 assert.equal(verifyHumanVisualReviewReceipt(result, G).ok, true);
 
-result = evaluate(base({ observedSurface: 'web-browser' }));
+result = evaluate(base({ observedSurface: 'tauri' }));
 assert.equal(result.code, 'APPLICATION_SURFACE_MISMATCH');
+
+result = evaluate(base({ expectedSurface: 'tauri', observedSurface: 'tauri' }));
+assert.equal(result.result, 'STOP');
+assert.equal(result.code, 'FINAL_REALITY_RECEIPT_INVALID');
+assert.equal(result.reason, 'STAGED_REALITY_EXECUTION_SURFACE_MISMATCH');
 
 result = evaluate(base({ runtime: { ...base().runtime, bypassesDeclaredApplicationRuntime: true } }));
 assert.equal(result.code, 'APPLICATION_RUNTIME_BYPASS_DETECTED');
@@ -121,7 +126,7 @@ result = evaluate(base({ runtime: { ...base().runtime, presentationWindowId: 'hw
 assert.equal(result.code, 'MEASURED_PRESENTED_WINDOW_MISMATCH');
 
 result = evaluate(base({ runtime: { ...base().runtime, hostProcessName: 'chrome.exe' } }));
-assert.equal(result.code, 'TAURI_HOST_PROCESS_INVALID');
+assert.equal(result.result, 'PASS');
 
 result = evaluate(base({ environment: 'production' }));
 assert.equal(result.code, 'NON_PRODUCTION_ENVIRONMENT_REQUIRED');

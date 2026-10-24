@@ -115,4 +115,63 @@ const pathTraversal = structuredClone(issueInput);
 pathTraversal.changedFiles = ['../secret'];
 assert.equal(issueReceipt(pathTraversal).code, 'INVALID_CHANGED_FILES');
 
+// #374: the scope gate legitimately emits CLI_SCRIPT; receipt issue and verify must
+// preserve this *closed* profile without weakening UNKNOWN or binding checks.
+const cliInput = {
+  schemaVersion: 1,
+  mode: 'issue',
+  baseSha: A,
+  headSha: B,
+  changedFiles: [
+    'src/cli/issue116-stage2-source-audit.mjs',
+    'tests/issue116-stage2-source-audit.test.mjs',
+  ],
+  profile: 'CLI_SCRIPT',
+  scopeDecision: 'PROCEED_ESCALATED',
+  plannedChecks: ['DIFF_HYGIENE', 'TARGETED_SELFTEST', 'REAL_DEVICE_OBJECTIVE'],
+  results: [
+    { check: 'REAL_DEVICE_OBJECTIVE', status: 'success', evidenceSource: 'device' },
+    { check: 'DIFF_HYGIENE', status: 'success', evidenceSource: 'local' },
+    { check: 'TARGETED_SELFTEST', status: 'success', evidenceSource: 'device' },
+  ],
+};
+const cliIssued = issueReceipt(cliInput);
+assert.equal(cliIssued.pass, true, 'CLI_SCRIPT must be issuable after scope PROCEED_ESCALATED');
+assert.equal(cliIssued.receipt.profile, 'CLI_SCRIPT');
+const cliCurrent = { baseSha: A, headSha: B, changedFiles: [...cliInput.changedFiles].reverse() };
+const cliVerified = verifyReceipt({ schemaVersion: 1, mode: 'verify', receipt: cliIssued.receipt, current: cliCurrent });
+assert.equal(cliVerified.decision, 'REUSE');
+assert.deepEqual(cliVerified.reusableChecks, [...cliInput.plannedChecks].sort());
+for (const [field, code] of [
+  ['baseSha', 'BASE_SHA_MISMATCH'],
+  ['headSha', 'HEAD_SHA_MISMATCH'],
+]) {
+  const wrong = { ...cliCurrent, [field]: C };
+  assert.equal(verifyReceipt({ schemaVersion: 1, mode: 'verify', receipt: cliIssued.receipt, current: wrong }).code, code);
+}
+assert.equal(verifyReceipt({
+  schemaVersion: 1, mode: 'verify', receipt: cliIssued.receipt,
+  current: { ...cliCurrent, changedFiles: ['VERSION'] },
+}).code, 'CHANGED_FILES_MISMATCH');
+const cliTampered = structuredClone(cliIssued.receipt);
+cliTampered.profile = 'BACKEND_ONLY';
+assert.equal(verifyReceipt({
+  schemaVersion: 1, mode: 'verify', receipt: cliTampered, current: cliCurrent,
+}).code, 'RECEIPT_TAMPERED');
+const cliUnknown = structuredClone(cliInput);
+cliUnknown.profile = 'UNKNOWN';
+assert.equal(issueReceipt(cliUnknown).code, 'INVALID_PROFILE');
+const cliUnsupported = structuredClone(cliInput);
+cliUnsupported.profile = 'CLAIMED_APP';
+assert.equal(issueReceipt(cliUnsupported).code, 'INVALID_PROFILE');
+const cliUnproved = structuredClone(cliInput);
+cliUnproved.results[2].status = 'unrun';
+assert.equal(issueReceipt(cliUnproved).code, 'INCOMPLETE_OR_NONPASS_RESULTS');
+const cliMissing = structuredClone(cliInput);
+cliMissing.results = cliMissing.results.slice(0, 2);
+assert.equal(issueReceipt(cliMissing).code, 'INCOMPLETE_OR_NONPASS_RESULTS');
+const cliBadDecision = structuredClone(cliInput);
+cliBadDecision.scopeDecision = 'STOP';
+assert.equal(issueReceipt(cliBadDecision).code, 'INVALID_SCOPE_DECISION');
+
 console.log('verification-evidence-receipt-selftest: PASS');
