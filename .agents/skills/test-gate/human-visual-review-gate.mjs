@@ -172,7 +172,7 @@ export function evaluate(input) {
   const timestampCheck = reviewTimestamp(input.generatedAt);
   if (!timestampCheck.ok) return stop(timestampCheck.code);
 
-  const staged = verifyStagedRealityReceipt(input.stagedRealityReceipt, input.stateId, { requireFinal: true, requireUi: true });
+  const staged = verifyStagedRealityReceipt(input.stagedRealityReceipt, input.stateId, { requireFinal: true, requireUi: true, ...(input.expectedSurface === 'tauri' ? { expectedExecutionSurface: 'Tauri native' } : {}) });
   if (!staged.ok) return stop('FINAL_REALITY_RECEIPT_INVALID', { reason: staged.code });
 
   if (!SURFACES.has(input.expectedSurface) || !SURFACES.has(input.observedSurface)) return stop('APPLICATION_SURFACE_INVALID');

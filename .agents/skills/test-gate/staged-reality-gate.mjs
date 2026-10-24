@@ -4,6 +4,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { verifyStagedEvidence as verifyUiReproductionEvidence } from './ui-reference-reproduction-gate.mjs';
 import { verifyCleanupReceipt } from './ui-browser-lifecycle.mjs';
+import { verifyNativeCleanupReceipt } from './ui-native-cleanup-evidence.mjs';
 
 const MAX_INPUT_BYTES = 64 * 1024;
 const PHASES = new Set(['EARLY_CHECK', 'MILESTONE_CHECK', 'FINAL_REALITY_CHECK']);
@@ -16,6 +17,7 @@ const EVIDENCE_KINDS = new Set([
   'GIT_STATE', 'DIFF', 'SCREENSHOT', 'DOM', 'RUNTIME', 'TARGETED_TEST',
   'TEST_GATE_RESULT', 'API_RESPONSE', 'DB_SCHEMA', 'DB_STATE', 'CLI_OUTPUT',
   'GENERATED_ARTIFACT', 'HASH', 'DOCUMENT_CONSISTENCY', 'UI_MEASUREMENT', 'PROTECTED_FILES_CHECK', 'UI_BROWSER_CLEANUP',
+  'UI_NATIVE_CLEANUP',
 ]);
 const STATE_ID_RE = /^(?:git|remote):[0-9a-f]{40}$|^(?:worktree|artifact):[0-9a-f]{64}$/;
 
@@ -56,13 +58,16 @@ function checkpointRequirements(phase) {
   if (phase === 'MILESTONE_CHECK') return ['scopeMatch', 'milestoneObserved', 'structureMatch'];
   return ['scopeMatch', 'structureMatch', 'implementationComplete', 'deliverableMatch'];
 }
-function evidenceRequirements(taskTypes, phase) {
+function isNativeExecutionSurface(identity) {
+  return identity?.executionSurfaceExpected === 'Tauri native' && identity?.executionSurfaceObserved === 'Tauri native';
+}
+function evidenceRequirements(taskTypes, phase, identity) {
   const groups = [['GIT_STATE'], ['DIFF']];
   for (const taskType of taskTypes) {
     for (const group of TASK_REQUIREMENTS[taskType] ?? []) groups.push(group);
   }
   if (phase === 'FINAL_REALITY_CHECK' && taskTypes.some(taskType => ['UI', 'UI_REFERENCE_REPRODUCTION'].includes(taskType))) {
-    groups.push(['UI_BROWSER_CLEANUP']);
+    groups.push([isNativeExecutionSurface(identity) ? 'UI_NATIVE_CLEANUP' : 'UI_BROWSER_CLEANUP']);
   }
   if (taskTypes.includes('FOUNDATION_GOVERNANCE')) {
     groups.push(['DOCUMENT_CONSISTENCY']);
@@ -82,6 +87,7 @@ function normalizeEvidence(evidence) {
     stateId: item.stateId,
     ...(['UI_MEASUREMENT', 'PROTECTED_FILES_CHECK'].includes(item.kind) && item.receipt?.receiptId ? { uiReproductionReceiptId: item.receipt.receiptId } : {}),
     ...(item.kind === 'UI_BROWSER_CLEANUP' && item.receipt?.runId ? { uiBrowserRunId: item.receipt.runId } : {}),
+    ...(item.kind === 'UI_NATIVE_CLEANUP' && item.receipt?.runId ? { uiNativeRunId: item.receipt.runId } : {}),
   }));
 }
 export function verifyStagedRealityReceipt(receipt, expectedStateId = '', options = {}) {
@@ -111,11 +117,28 @@ export function verifyStagedRealityReceipt(receipt, expectedStateId = '', option
   const expectedReceiptId = createHash('sha256').update(JSON.stringify(core)).digest('hex');
   if (receipt.receiptId !== expectedReceiptId) return { ok: false, code: 'STAGED_REALITY_RECEIPT_TAMPERED' };
   if (expectedStateId && receipt.stateId !== expectedStateId) return { ok: false, code: 'STAGED_REALITY_RECEIPT_STALE' };
+  if (receipt.phase === 'FINAL_REALITY_CHECK') {
+    const requiredEvidence = Array.isArray(receipt.requiredEvidence) ? receipt.requiredEvidence : [];
+    const evidenceList = Array.isArray(receipt.evidence) ? receipt.evidence : [];
+    const claimsNative = receipt.identity?.executionSurfaceExpected === 'Tauri native' ||
+      receipt.identity?.executionSurfaceObserved === 'Tauri native' ||
+      requiredEvidence.some(entry => typeof entry === 'string' && entry.split('|').includes('UI_NATIVE_CLEANUP')) ||
+      evidenceList.some(item => item && (item.kind === 'UI_NATIVE_CLEANUP' || item.uiNativeRunId));
+    if (claimsNative) return { ok: false, code: 'NATIVE_FINAL_ISSUER_NOT_PROVEN' };
+  }
   if (options.requireFinal === true && receipt.phase !== 'FINAL_REALITY_CHECK') {
     return { ok: false, code: 'STAGED_REALITY_FINAL_REQUIRED' };
   }
   if (options.requireUi === true && !receipt.taskTypes.some(taskType => ['UI', 'UI_REFERENCE_REPRODUCTION'].includes(taskType))) {
     return { ok: false, code: 'STAGED_REALITY_UI_REQUIRED' };
+  }
+  if (Object.hasOwn(options, 'expectedExecutionSurface')) {
+    const expectedSurface = options.expectedExecutionSurface;
+    if (!bounded(expectedSurface, 500) ||
+        receipt.identity?.executionSurfaceExpected !== expectedSurface ||
+        receipt.identity?.executionSurfaceObserved !== expectedSurface) {
+      return { ok: false, code: 'STAGED_REALITY_EXECUTION_SURFACE_MISMATCH' };
+    }
   }
   return { ok: true, code: 'STAGED_REALITY_RECEIPT_VALID', receiptId: receipt.receiptId };
 }
@@ -177,10 +200,15 @@ export function evaluate(input) {
       const cleanup = verifyCleanupReceipt(item.receipt, input.stateId);
       if (!cleanup.ok) return stop('UI_BROWSER_CLEANUP_FAILED', { reason: cleanup.reason, reference: item.reference });
     }
+    if (item.kind === 'UI_NATIVE_CLEANUP' && item.status === 'PASS') {
+      const cleanup = verifyNativeCleanupReceipt(item.receipt, input.stateId, item.preEvidence);
+      if (!cleanup.ok) return stop('UI_NATIVE_CLEANUP_FAILED', { reason: cleanup.reason, reference: item.reference });
+      return stop('UI_NATIVE_CLEANUP_FAILED', { reason: 'TRUSTED_NATIVE_ISSUER_REQUIRED', reference: item.reference });
+    }
   }
 
   const passKinds = new Set(input.evidence.filter(item => item.status === 'PASS' && item.stateId === input.stateId).map(item => item.kind));
-  const requirements = evidenceRequirements(input.taskTypes, input.phase);
+  const requirements = evidenceRequirements(input.taskTypes, input.phase, input.identity);
   const missingEvidence = requirements
     .filter(group => !group.some(kind => passKinds.has(kind)))
     .map(group => group.join('|'));

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { buildPortfolioReport, collectPortfolio } from './portfolio-health-observer.mjs';
+import { buildReport as buildImprovementFollowupReport } from './improvement-followup.mjs';
 
 const NOW = Date.parse('2026-09-17T02:55:00.000Z');
 const fetchedAt = '2026-09-17T02:54:00.000Z';
@@ -79,5 +80,57 @@ const degraded = await collectPortfolio(config, { sourceRoot: 'C:/foundation', n
 assert.equal(degraded.ok, true);
 assert.equal(degraded.totals.wipUnknown, 1);
 assert(degraded.repositories[0].attention.includes('WIP_UNKNOWN'));
+
+// improvement-followup (Issue #280 Phase 1) wiring: an absent field must not
+// add any attention/totals noise to repositories that have not adopted it.
+assert.equal(out.totals.improvementFollowupUnknown, 0);
+assert.equal(out.totals.improvementFollowupNewCandidates, 0);
+assert.equal('improvementFollowup' in out.repositories[0], false);
+
+// A real improvement-followup.mjs report feeds this manifest field end to
+// end, proving genuine interoperability rather than an unused parallel
+// helper.
+const followupEvidence = {
+  schemaVersion: 1,
+  repository: 'acme/current',
+  projectContextId: 'ai-common-platform-v1',
+  expectedOwner: 'maintainer-bot',
+  fetchedAt: fetchedAt,
+  retrievalComplete: true,
+  knownRecords: [],
+  items: [{
+    id: 'issue-200', sourceType: 'issue', number: 200,
+    title: 'Improve observer error text', summary: 'Cite the offending PR number in the stop code.',
+    owner: 'maintainer-bot', projectContextId: 'ai-common-platform-v1',
+    createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-16T00:00:00.000Z',
+    state: 'open', labels: ['improvement'], protectedData: false,
+    claimedCompletion: false, runnerEvidence: null,
+  }],
+};
+const followupReport = buildImprovementFollowupReport({
+  evidence: followupEvidence, repo: 'acme/current', projectContextId: 'ai-common-platform-v1',
+  nowMs: NOW, generatedAt: new Date(NOW).toISOString(),
+});
+assert.equal(followupReport.ok, true);
+assert.equal(followupReport.newCandidateCount, 1);
+const withFollowup = structuredClone(manifest);
+withFollowup.repositories[0].improvementFollowup = followupReport;
+const followupOut = buildPortfolioReport(withFollowup, { nowMs: NOW });
+assert.equal(followupOut.ok, true);
+assert.equal(followupOut.totals.improvementFollowupNewCandidates, 1);
+assert.equal(followupOut.repositories[0].improvementFollowup.status, 'CURRENT');
+assert.equal(followupOut.repositories[0].improvementFollowup.newCandidateCount, 1);
+assert(followupOut.repositories[0].attention.includes('IMPROVEMENT_FOLLOWUP_NEW_CANDIDATES'));
+
+const followupMismatch = structuredClone(manifest);
+followupMismatch.repositories[0].improvementFollowup = { ...followupReport, repository: 'acme/other' };
+assert.equal(buildPortfolioReport(followupMismatch, { nowMs: NOW }).code, 'PORTFOLIO_IMPROVEMENT_FOLLOWUP_REPOSITORY_MISMATCH');
+
+const followupInvalid = structuredClone(manifest);
+followupInvalid.repositories[0].improvementFollowup = { ok: false, repository: 'acme/current', code: 'EVIDENCE_STALE' };
+const followupInvalidOut = buildPortfolioReport(followupInvalid, { nowMs: NOW });
+assert.equal(followupInvalidOut.ok, true);
+assert.equal(followupInvalidOut.totals.improvementFollowupUnknown, 1);
+assert(followupInvalidOut.repositories[0].attention.includes('IMPROVEMENT_FOLLOWUP_UNKNOWN'));
 
 console.log('portfolio-health-observer selftest: PASS');

@@ -13,11 +13,37 @@ const {
   codexCliSupport,
   claudeCliSupport,
   successfulProbeText,
+  summarizeCodexCloudReadiness,
   buildReadiness,
 } = await import(readinessUrl);
 
 function assert(condition, message) {
   if (!condition) throw new Error(`FAIL: ${message}`);
+}
+
+// Cloud metadata is never source-write authority. Unknown privacy, billing,
+// quota or environment must remain visible even when local CLI auth works.
+{
+  const unknown = summarizeCodexCloudReadiness();
+  assert(unknown.status === 'UNQUALIFIED' && unknown.dispatchAuthorized === false, 'unknown Cloud cannot dispatch');
+  assert(unknown.blockers.length === 7, 'all Cloud unknowns must be visible');
+  assert(!JSON.stringify(unknown).includes('secret_value'), 'diagnostics must contain reason codes only');
+  const keys = [
+    'environmentBindingObserved', 'repositorySourceAndHistoryAudited',
+    'cloudCredentialAndNetworkBoundaryAudited', 'accountAutoTopupDisabledObserved',
+    'accountPaidCreditsDisabledObserved', 'quotaExhaustionFailClosedObserved',
+    'authenticatedWriterProvenanceAvailable',
+  ];
+  const claims = Object.fromEntries(keys.map(key => [key, true]));
+  const claimed = summarizeCodexCloudReadiness({...claims, secret: 'secret_value'});
+  assert(claimed.status === 'UNQUALIFIED' && claimed.dispatchAuthorized === false, 'self-asserted Cloud evidence cannot promote');
+  assert(claimed.blockers.includes('CLOUD_ATTESTATION_NOT_INDEPENDENTLY_VERIFIED'), 'untrusted attestations cannot qualify');
+  assert(!JSON.stringify(claimed).includes('secret_value'), 'extra input must not be echoed');
+  for (const key of keys) {
+    const missing = summarizeCodexCloudReadiness({...claims, [key]: false});
+    assert(missing.dispatchAuthorized === false && missing.blockers.length === 1, `Cloud missing ${key} must block`);
+  }
+  assert(summarizeCodexCloudReadiness(null).blockers.length === 7, 'null observations must fail closed');
 }
 
 function capacity(credits = { status: 'AVAILABLE', hasCredits: false, balanceState: 'NONE' }) {
@@ -123,6 +149,10 @@ for (const fragment of ['--safe-mode','--tools <tools...>','Use "" to disable al
   assert(result.qualification.result === 'NO_QUALIFIED_ADAPTER', 'current evidence must stay unqualified');
   assert(result.qualification.qualifiedRoutes.length === 0, 'readiness must not auto-promote');
   assert(result.readiness.codex.authState === 'VERIFIED', 'codex auth should be verified');
+  assert(result.readiness.codexCloud.status === 'UNQUALIFIED' &&
+    result.readiness.codexCloud.dispatchAuthorized === false &&
+    result.readiness.codexCloud.blockers.includes('CLOUD_AUTOTOPUP_UNVERIFIED'),
+    'logged-in local Codex must never qualify Codex Cloud');
   assert(result.readiness.codex.creditBalanceState === 'NONE', 'zero extra-credit state should be visible without amount');
   assert(result.readiness.codex.blockers.includes('CREDIT_AUTOTOPUP_STATE_UNAVAILABLE'), 'codex auto-topup unknown must block');
   assert(result.readiness.claude.authState === 'VERIFIED', 'claude plan auth should be verified');

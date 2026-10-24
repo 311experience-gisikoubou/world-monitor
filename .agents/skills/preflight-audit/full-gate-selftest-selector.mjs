@@ -11,6 +11,8 @@ const ALL = [
   'implementation-runner','implementation-route-receipt','implementation-orchestrator','research-gate','environment-lifecycle',
   'agent-cycle','agent-job-bridge','apps-script-fixture','claude-job-launcher','claude-job-launcher-prompt-envelope',
   'verification-scope','legacy-implementation-audit',
+  'improvement-followup',
+  'scope-boundary','writer-lease',
   'full-gate-selector',
 ];
 const COMMANDS = {
@@ -59,6 +61,9 @@ const COMMANDS = {
   'claude-job-launcher-prompt-envelope':['node','.agents/skills/long-task-wait/claude-job-launcher-prompt-envelope-selftest.mjs'],
   'verification-scope':['node','.agents/skills/test-gate/verification-scope-gate-selftest.mjs'],
   'legacy-implementation-audit':['node','.agents/skills/preflight-audit/legacy-implementation-audit-selftest.mjs','.agents/skills/preflight-audit/legacy-implementation-audit.mjs'],
+  'improvement-followup':['node','.agents/skills/preflight-audit/improvement-followup-selftest.mjs','.agents/skills/preflight-audit/improvement-followup.mjs'],
+  'scope-boundary':['node','.agents/skills/preflight-audit/scope-boundary-gate-selftest.mjs','.agents/skills/preflight-audit/scope-boundary-gate.mjs'],
+  'writer-lease':['node','.agents/skills/preflight-audit/writer-lease-guard-selftest.mjs','.agents/skills/preflight-audit/writer-lease-guard.mjs'],
   'full-gate-selector':['node','.agents/skills/preflight-audit/full-gate-selftest-selector-selftest.mjs','.agents/skills/preflight-audit/full-gate-selftest-selector.mjs'],
 };
 const GROUPS = {
@@ -66,7 +71,9 @@ const GROUPS = {
   'actions-cost':['actions-cost'],
   'claude-runner':['claude-runner'],
   'stagnation':['stagnation'],
-  'project-context':['project-context','project-memory'],
+  'project-context':['project-context','project-memory','scope-boundary','writer-lease'],
+  'scope-boundary':['scope-boundary'],
+  'writer-lease':['writer-lease'],
   'common-rule-health':['common-rule-health'],
   'portfolio-governance':['portfolio-governance','common-rule-health'],
   'live-base-ref':['live-base-ref'],
@@ -74,7 +81,8 @@ const GROUPS = {
   'security-history':['security-history'],
   'security-preflight':['security-preflight'],
   'wip-observer':['wip-observer'],
-  'portfolio-health':['portfolio-health'],
+  'portfolio-health':['portfolio-health','improvement-followup'],
+  'improvement-followup':['improvement-followup','portfolio-health'],
   'long-task-wait':['long-task-wait','stagnation','claude-job-launcher','claude-job-launcher-prompt-envelope'],
   'merge-readiness':['merge-readiness'],
   'merge-execution-batch':['merge-execution','merge-execution-batch'],
@@ -127,6 +135,9 @@ function familyFor(path) {
   if (pair(path,pre,'security-preflight')) return 'security-preflight';
   if (pair(path,pre,'wip-review-queue-observer')) return 'wip-observer';
   if (pair(path,pre,'portfolio-health-observer')) return 'portfolio-health';
+  if (pair(path,pre,'improvement-followup')) return 'improvement-followup';
+  if (pair(path,pre,'scope-boundary-gate')) return 'scope-boundary';
+  if (pair(path,pre,'writer-lease-guard')) return 'writer-lease';
   if (['bounded-task-wait','turn-wait-budget'].some(stem => pair(path,'.agents/skills/long-task-wait',stem))) return 'long-task-wait';
   if (pair(path,'.agents/skills/long-task-wait','long-task-wait')) return 'long-task-wait';
   if (path === '.agents/skills/long-task-wait/claude-job-launcher-selftest.mjs') return 'long-task-wait';

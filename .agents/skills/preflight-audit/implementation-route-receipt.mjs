@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { computeChangeSetSha256 } from './implementation-runner.mjs';
 import { evaluateInstructionClarity } from './instruction-clarity-gate.mjs';
 import {
-  evaluateResearchGateBound, blocksSourceWrite,
+  evaluateResearchGateBound, blocksSourceWrite, BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE,
   validateResearchEnvelopeShape, buildResearchExpectedBinding,
 } from './research-gate.mjs';
 
@@ -118,6 +118,9 @@ export function validateReceipt(input) {
   if (!branchToken(input.branch)) errors.push('branch_invalid');
   if (!stringArray(input.allowedScope)) errors.push('allowedScope_invalid');
   if (!DATA_CLASSES.has(input.dataClass)) errors.push('dataClass_invalid');
+  if (input.trialWriteMode !== undefined && input.trialWriteMode !== BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE) {
+    errors.push('trialWriteMode_invalid');
+  }
   if (!COST_POLICIES.has(input.costPolicy)) errors.push('costPolicy_invalid');
 
   if (input.requestedAuthorities !== undefined && !stringArray(input.requestedAuthorities) &&
@@ -202,7 +205,7 @@ function decide(input) {
   if (CHATGPT_DIRECT_GATED_KINDS.has(task.kind)) {
     const expected = buildResearchExpectedBinding(input.research, { taskId: task.id, repository, scope: input.allowedScope });
     researchGate = evaluateResearchGateBound(input.research.evidence, expected);
-    if (blocksSourceWrite(researchGate)) {
+    if (blocksSourceWrite(researchGate, { trialWriteMode: input.trialWriteMode, dataClass: input.dataClass })) {
       return stop('RESEARCH_GATE_BLOCKED', { taskId: task.id, researchGate });
     }
   }
@@ -223,6 +226,7 @@ function decide(input) {
     branch: input.branch,
     allowedScope: [...input.allowedScope],
     dataClass: input.dataClass,
+    trialWriteMode: input.trialWriteMode ?? null,
     costPolicy: input.costPolicy,
     exception: input.exception ? {
       reason: input.exception.reason,
@@ -289,7 +293,9 @@ export function verifyFinalReceipt(receipt, expected) {
       taskId: receipt.taskId, repository: receipt.repository, scope: receipt.allowedScope,
     });
     const researchGate = evaluateResearchGateBound(receipt.research.evidence, researchExpected);
-    if (blocksSourceWrite(researchGate)) return stop('RESEARCH_EVIDENCE_MISSING_OR_FAILED', { researchGate });
+    if (blocksSourceWrite(researchGate, { trialWriteMode: receipt.trialWriteMode, dataClass: receipt.dataClass })) {
+      return stop('RESEARCH_EVIDENCE_MISSING_OR_FAILED', { researchGate });
+    }
   }
   // A qualified-agent receipt claims a runner actually produced the
   // committed change set. Schema validation already proved the evidence is
@@ -304,6 +310,17 @@ export function verifyFinalReceipt(receipt, expected) {
     const recomputed = computeChangeSetSha256(expected.repoRoot, receipt.executionEvidence.preHead, receipt.implementationHead);
     if (!recomputed) return stop('EXECUTION_EVIDENCE_UNVERIFIABLE');
     if (recomputed.changeSetSha256 !== receipt.executionEvidence.changeSetSha256) return stop('EXECUTION_EVIDENCE_CHANGE_SET_MISMATCH');
+    // The hash check alone cannot catch a receipt that records a changedPaths
+    // list which doesn't exactly correspond (same length, same canonical
+    // order) to the actually-committed path set the hash was computed from.
+    // Require an exact positional match against the recomputed, canonically
+    // ordered changedPaths rather than trusting the receipt's own listing.
+    const receivedChangedPaths = receipt.executionEvidence.changedPaths;
+    const recomputedChangedPaths = recomputed.changedPaths;
+    if (receivedChangedPaths.length !== recomputedChangedPaths.length ||
+        receivedChangedPaths.some((changedPath, index) => changedPath !== recomputedChangedPaths[index])) {
+      return stop('EXECUTION_EVIDENCE_CHANGE_SET_MISMATCH');
+    }
   }
   return { schemaVersion: 1, result: 'MERGE_READY', code: 'FINAL_RECEIPT_VERIFIED' };
 }

@@ -20,6 +20,8 @@ next turn -> validate checkpoint -> observe the same task/process -> continue wi
 
 Do not use short-interval repeated `status` calls for continuous monitoring. Keep `status` for one-shot inspection, troubleshooting, and debugging. If a runner controls its own status output, it should include a hint that continuous monitoring uses bounded wait.
 
+**Mandatory:** help/version/status/list/read-only probes that are expected to finish promptly are short-command work (`operation-preflight` `--execution-class short-command`), not a long task. If one of these hangs, do not convert it into a long-task polling/wait loop merely because it hung; terminate/inspect the exact AI-owned diagnostic process instead.
+
 ## Bounded wait contract
 
 Import `bounded-task-wait.mjs` from a task runner and pass the runner's existing read-only status function as `readStatus`. The helper itself must never start or restart tasks and must never accept an arbitrary shell command.

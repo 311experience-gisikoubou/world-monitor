@@ -5,6 +5,8 @@ description: Use before implementation, fixes, refactoring, UI/backend/design ch
 
 # Preflight Audit
 
+This file is the mandatory summary/boundaries entry point. Detailed CLI/schema/self-test mechanics for the capacity/routing/execution mechanisms below are kept in `.agents/skills/preflight-audit/REFERENCE.md`; load that file only when the specific mechanism is relevant. The mandatory safety, cost, authority, Research Gate, Human Decision, merge-authorization, and fail-closed rules in this file remain authoritative either way.
+
 ## Operating Principle
 
 - Safe read-only work, inspection, testing, auditing, and technical decisions should proceed automatically.
@@ -94,7 +96,7 @@ Record the result as `REUSE_EXISTING`, `ADOPT_OSS`, `COMPOSE_EXISTING`, `CUSTOM_
 
 ## Research Gate
 
-After Project Intake and before any source writer / install / account / config / external adoption, `.agents/skills/preflight-audit/research-gate.mjs` is the single machine-readable checklist authority for this closed structured risk assessment. It never invokes a provider and never grants write/install/merge authority; it only returns `ADOPT`, `TRIAL_REQUIRED` (narrow synthetic trial only), `REJECT`, or `STOP`.
+After Project Intake and before any source writer / install / account / config / external adoption, `.agents/skills/preflight-audit/research-gate.mjs` is the single machine-readable checklist authority for this closed structured risk assessment. It never invokes a provider and never grants write/install/merge authority; it only returns `ADOPT`, `TRIAL_REQUIRED` (narrow synthetic trial only), `REJECT`, or `STOP`. `TRIAL_REQUIRED` blocks source writes by default. The only exception is an explicit `trialWriteMode: "SYNTHETIC_BOUNDED_MINIMAL_ONLY"` carried through the task and both route receipts, with independently recomputed trial authorization of that exact scope and `dataClass: "synthetic"`. It permits only minimal preparation for that bounded synthetic trial; it does not authorize production deployment, general implementation, real data, merge, account/config changes, or destructive actions.
 
 ```text
 node .agents/skills/preflight-audit/research-gate.mjs --input <research-gate.json> --pretty
@@ -157,234 +159,20 @@ At job start, and whenever the execution AI or route may materially change, sele
 - Never reduce required safety, quality, independent review, data protection, or human approval to save quota or cost. A new recurring charge, subscription, paid tier, or changed cost commitment remains a genuine human value/ownership gate.
 - Do not ask a non-engineer user to choose between Codex, Claude, or another available AI when the selection can be resolved technically from the evidence above.
 
-### Machine-readable capacity evidence
-
-When `.agents/skills/preflight-audit/ai-capacity-observer.mjs` is present and the local execution environment can safely run Node.js, use it before making a current capacity/quota claim about Codex or Claude:
-
-```text
-node .agents/skills/preflight-audit/ai-capacity-observer.mjs --pretty
-```
-
-- Treat only provider fields marked `AVAILABLE` as measured capacity evidence. `UNAVAILABLE` means exactly unavailable; do not estimate or backfill it from local activity, elapsed time, subscription labels, or another provider's usage.
-- The observer intentionally emits only routing-relevant safe fields. It must not emit account IDs, organization IDs/names, email addresses, credential material, credit identifiers/balances, prompts, protected filenames, or business/patient data.
-- A `PARTIAL` capacity comparison is useful evidence but is not proof that the chosen cross-provider allocation is globally optimal. Continue to use job fit, safety, permissions, context, known cost, and independent-review needs for providers whose remaining capacity is unavailable.
-- Failure to observe one provider does not make another provider mandatory. Record the missing signal and continue only within the existing safety/cost/quality boundaries.
-
-Observer self-test:
-
-```text
-node .agents/skills/preflight-audit/ai-capacity-observer-selftest.mjs .agents/skills/preflight-audit/ai-capacity-observer.mjs
-```
-
-### Machine-readable bounded task handoff
-
-Once a route decision is otherwise ready, `.agents/skills/preflight-audit/ai-task-router.mjs` turns the existing AI Route Selection criteria into a deterministic, provider-neutral bounded handoff. It selects routes only; it never invokes a provider or grants authority.
-
-```text
-node .agents/skills/preflight-audit/ai-task-router.mjs --input <task-and-routes.json> --pretty
-```
-
-Input is JSON with `schemaVersion: 1`, one `task`, and `routes[]`. The task supplies `id`, `kind`, `objective`, required capabilities/permissions, one `executionEnvironment`, `dataClass`, `costPolicy`, `independentReviewRequired`, `forbiddenAuthorities`, allowed/forbidden scope, done conditions, required tests, and return format. Each route supplies `id`, `provider`, availability/environment/capabilities/permissions/data classes, `incrementalCost`, `safetyStatus`, capacity evidence, and optional `jobFitScore`.
-
-- Hard filters run before ranking: route availability must be `AVAILABLE`, safety must be `SAFE_CONFIRMED`, execution environment/capabilities/permissions/data class must fit, unknown incremental cost is rejected, and `EXTRA` is rejected under `no-new-cost`. A route carrying any gated or task-forbidden authority permission is excluded.
-- Human-gated task kinds/required permissions, protected/real data, merge, production, destructive operations, recurring-cost adoption, external-data-route changes, lifecycle-responsibility changes, and business-policy decisions return `STOP / HUMAN_GATE_REQUIRED`. The router cannot authorize them.
-- Ranking is deterministic: job fit first; included/free cost is preferred over extra when extra cost is allowed; measured remaining capacity participates only when every viable route has measured capacity; if evidence is mixed, capacity is excluded from ranking rather than guessed or treated as 0; final tie-break is route id.
-- If independent review is required, reviewer eligibility is evaluated separately from executor eligibility: the route must explicitly advertise the `review` capability and still pass the same availability/safety/environment/data/cost/authority boundaries, and must always have at least one explicit `*-read` permission to inspect the target; executor write permissions are additionally reduced to their corresponding read requirement where one exists. The reviewer must be a different route and a different provider is preferred. If no qualified reviewer exists, result is `NEEDS_REVIEW_ROUTE`, never a false pass.
-- Safety-relevant task kinds, permissions, forbidden authorities, data classes, availability/cost/safety/capacity states use closed vocabularies; unknown values and duplicate route IDs fail the whole request closed. Output is allow-listed to route ids/providers and routing evidence. Arbitrary input fields, credentials, account identifiers, protected data, and unrelated prompts/filenames are not echoed.
-- The handoff contains only the bounded objective/scope/done conditions/tests/return format, selected executor id/provider, and `authorityLimit: HUMAN_ONLY_FOR_GATED_ACTIONS`.
-
-Router self-test:
-
-```text
-node .agents/skills/preflight-audit/ai-task-router-selftest.mjs .agents/skills/preflight-audit/ai-task-router.mjs
-```
-
-### Machine-readable implementation route receipt
-
-The router selects a route; it does not itself prove that the selection was honored before or after the work. `.agents/skills/preflight-audit/implementation-route-receipt.mjs` closes that gap for the specific failure this phase targets: routing evidence that only lives in chat and is never actually enforced, including a ChatGPT/browser direct executor quietly doing `implementation`, `bugfix`, `refactor`, or `design-with-source-write` work.
-
-Before starting implementation work, record a pre-implementation routing authorization:
-
-```text
-node .agents/skills/preflight-audit/implementation-route-receipt.mjs --input <pre-implementation-receipt.json> --pretty
-```
-
-After the work lands, finalize the same binding with the exact 40-character implementation HEAD:
-
-```text
-node .agents/skills/preflight-audit/implementation-route-receipt.mjs --input <final-receipt.json> --pretty
-```
-
-- The schema is closed to `schemaVersion`, `stage` (`pre-implementation` or `final`), `task.id`/`task.kind`, `executor.id`/`executor.provider`/`executor.routeType`, `repository.owner`/`repository.name`, `branch`, `allowedScope`, `dataClass` (`source-only` / `synthetic` / `public` only), `costPolicy` (`no-new-cost` only), optional `requestedAuthorities`, an optional `exception`, and — at `stage: final` only — the exact 40-character `implementationHead`.
-- For `implementation`, `bugfix`, `refactor`, and `design-with-source-write`, an `executor.routeType` of `direct-browser` (a ChatGPT/browser direct executor) is rejected by default with `DIRECT_EXECUTOR_EXCEPTION_REQUIRED`.
-- A direct executor is permitted only through a closed exception vocabulary — `HUMAN_EXPLICIT_DIRECT`, `TRIVIAL_SAFE_LOCAL_EDIT`, `NO_QUALIFIED_EXECUTOR_LOWER_RISK_DIRECT` — plus a non-empty bounded `justification` and `evidenceConfirmed: true`. No matching exception means `STOP`, never a silent pass.
-- `main`, `master`, and `trunk` branches, protected/real data classes, unknown cost, and `merge` / `production` / `destructive` requested authorities are rejected; malformed repository/branch/scope/head values fail schema-closed.
-- This is a **local pre-work gate plus a final-audit-bound receipt**, not a universal enforcement of what happens inside a browser turn. It cannot force a ChatGPT browser session to call this script before it starts typing; it can only make the routing evidence and the final-PR gate below mechanically check the receipt that was (or was not) produced.
-
-Selftest:
-
-```text
-node .agents/skills/preflight-audit/implementation-route-receipt-selftest.mjs .agents/skills/preflight-audit/implementation-route-receipt.mjs
-```
-
-### Machine-readable provider inventory
-
-Before building a current `prompt-cli` route set, use `.agents/skills/preflight-audit/ai-provider-inventory.mjs` to turn measured local provider facts into router-compatible route records.
-
-```text
-node .agents/skills/preflight-audit/ai-provider-inventory.mjs --pretty
-```
-
-- The inventory is observation-only: it does not send prompts to a model, execute a real task, or consume provider quota just to prove routing readiness.
-- Codex ChatGPT authentication and measured capacity may be recorded, but the current route remains `UNAVAILABLE`: its local-tool/data boundary and exact incremental-cost boundary for a future prompt adapter are not both proven.
-- Claude `claude.ai` authentication and an allow-listed subscription label may be recorded, but the route remains `UNAVAILABLE` because the CLI exposes no supported noninteractive signal proving that metered extra usage is disabled for the future invocation path.
-- Gemini and Antigravity remain `UNAVAILABLE` until their prompt adapter, cost path, and safety boundary are independently verified. CLI/version presence alone never promotes them.
-- If an OpenAI or Anthropic API-key environment is present, only a boolean presence signal is emitted; key values are never read into output and cost remains `UNKNOWN`.
-- Codex remaining capacity uses only measured rate-limit windows and fails closed if any reported measured window is malformed or outside 0 to 100. Claude capacity remains `UNAVAILABLE` when no supported signal exists; it is never guessed.
-- Generated routes are `prompt-cli`, source-read only, and limited to `source-only`, `synthetic`, and `public` data classes. The inventory never claims repository write, shell/test execution, merge, or production authority.
-- Output values are allow-listed/normalized. Version output is reduced to numeric `major.minor.patch`; arbitrary suffixes, executable paths, tokens, email/org identifiers, prompt history, protected filenames, and unapproved reason strings are not emitted.
-- The emitted `routes` array conforms to `ai-task-router.mjs`; with the current evidence it is valid for the router to return `NO_EXECUTOR_AVAILABLE`. A later adapter must earn promotion with separate safety and cost evidence.
-
-Inventory self-test:
-
-```text
-node .agents/skills/preflight-audit/ai-provider-inventory-selftest.mjs .agents/skills/preflight-audit/ai-provider-inventory.mjs .agents/skills/preflight-audit/ai-task-router.mjs
-```
-
-### Machine-readable adapter qualification
-
-After provider inventory and before any real provider invocation, use `.agents/skills/preflight-audit/provider-adapter-qualification.mjs` to decide whether an adapter has earned promotion to an `AVAILABLE` router route.
-
-```text
-node .agents/skills/preflight-audit/provider-adapter-qualification.mjs --input <adapter-evidence.json> --pretty
-```
-
-- Qualification is provider-neutral and observation-only. It never invokes a model or widens permissions.
-- V1 qualifies only `prompt-cli` adapters restricted to explicit safe payloads, no local tools, `source-read`, and `source-only` / `synthetic` / `public` data.
-- Authentication, tool boundary, data boundary, incremental-cost boundary, and fallback behavior use closed evidence vocabularies. Unknown values fail schema closed.
-- No-new-cost requires included-only or free-only enforcement. `UNKNOWN` and `EXTRA_COST_POSSIBLE` never promote a route.
-- Fallback must stop before cost or permission expansion. Protected/real data, merge, production, destructive authority, and permission widening remain outside this gate.
-- Capacity may stay `UNAVAILABLE`; it is preserved and never guessed.
-- Qualified adapters emit router-compatible `AVAILABLE / SAFE_CONFIRMED` routes. Unqualified adapters emit reason codes but no route.
-- Prior-art scan considered OPA/Cedar/JSON-style engines; this bounded deterministic predicate does not justify a new runtime, package, policy language, or service dependency.
-
-Qualification self-test:
-
-```text
-node .agents/skills/preflight-audit/provider-adapter-qualification-selftest.mjs .agents/skills/preflight-audit/provider-adapter-qualification.mjs .agents/skills/preflight-audit/ai-task-router.mjs
-```
-
-### Machine-readable adapter readiness
-
-Before qualification or provider invocation, use `.agents/skills/preflight-audit/provider-adapter-readiness.mjs` to convert current local CLI/auth/capacity/safety facts into dev.50 qualification evidence.
-
-```text
-node .agents/skills/preflight-audit/provider-adapter-readiness.mjs --pretty
-```
-
-- Readiness is observation-only: provider version/auth/help, redacted Codex doctor state, rate-limit/credit state, and local CLI presence only. It never sends a model prompt or changes billing/account settings.
-- Exact credit balances, account IDs, emails, org IDs, tokens, paths from raw diagnostic payloads, and arbitrary provider fields are never emitted. Codex credits are reduced to `NONE / ZERO / POSITIVE / UNLIMITED / UNKNOWN`.
-- Codex ChatGPT-only auth, included capacity, credit state, isolation-flag support, and denied-read state are recorded separately; no-local-tool, auto-top-up, and runner guarantees remain blockers until independently proven.
-- Claude `claude.ai` Pro auth can be promoted only through the fail-closed `claude-subscription-runner.mjs`: Anthropic/Claude/AWS/Google/GCLOUD/Vertex/Azure provider or cloud environment variables are rejected case-insensitively before provider invocation; all tools are disabled; MCP is strict-empty; skills/Chrome/session persistence are disabled; input is explicit safe payload over stdin; and noninteractive execution cannot grant a billing/permission expansion.
-- Gemini / Antigravity remain blocked until their safe adapters are implemented and qualified.
-- The emitted `qualificationInput` is passed directly through dev.50. On the current `ai-dev` evidence, Claude may qualify as `claude-safe-prompt`; Codex, Gemini, and Antigravity remain unqualified. Any missing runner/auth/cost/tool/data evidence returns the route to `UNKNOWN`/unqualified.
-
-Readiness self-test:
-
-```text
-node .agents/skills/preflight-audit/provider-adapter-readiness-selftest.mjs .agents/skills/preflight-audit/provider-adapter-readiness.mjs
-```
-
-Claude subscription-only runner:
-
-```text
-<safe-task-json-stream> | node .agents/skills/preflight-audit/claude-subscription-runner.mjs --pretty
-```
-
-The task JSON schema is closed to `schemaVersion`, `taskId`, `capability`, `dataClass`, and `prompt`. Only `source-only`, `synthetic`, and `public` payloads are accepted; file paths and provider/config overrides are not part of the schema. Before qualification the runner copies the resolved Claude executable into a fresh isolated temporary directory, verifies that copied executable against the SHA-256 of the exact Claude Code binary that passed the reviewed synthetic safe-route smoke, and uses only that isolated attested copy for capability, auth, and model execution. The original CLI path is never executed after attestation, and only a native Claude descriptor with an empty prefix is accepted, so neither an updater replacing the original path nor injected descriptor-prefix arguments can change the executable/argument boundary in use. Any untrusted copy fails closed to UNQUALIFIED until a new smoke/review attestation updates the trusted hash. The runner returns only allow-listed execution evidence plus the model result and never returns raw stderr/provider diagnostics.
-
-Runner self-test:
-
-```text
-node .agents/skills/preflight-audit/claude-subscription-runner-selftest.mjs .agents/skills/preflight-audit/claude-subscription-runner.mjs
-```
-
-Claude executable implementation route:
-
-```text
-<closed-implementation-task-json-stream> | node .agents/skills/preflight-audit/implementation-orchestrator.mjs --pretty
-```
-
-For source implementation work, `claude-implementation-write` is the default executor only while its current readiness evidence qualifies it. `implementation-orchestrator.mjs` is the single normal entry point: it builds the bounded Claude route, asks `ai-task-router.mjs` to select it, issues the pre-implementation route authorization, verifies the feature repository/branch and GitHub-shaped `origin` identity, and invokes `implementation-runner.mjs` only when that exact Claude route was selected. Claude unavailable or unqualified is a fail-closed STOP; the orchestrator never silently substitutes ChatGPT direct execution.
-
-The task schema requires a clean feature worktree plus exact repository `{owner,name}`, `repoRoot`, `branch`, and a non-empty `allowedScope`. An optional `forbiddenScope` uses the same exact-path or trailing-`/**` syntax and is stricter than `allowedScope`: use it for reference images, dimensions, tolerances, inspection scripts, fixed fixtures, or any other task input the implementation AI may read but must not alter. Arbitrary wildcard patterns are rejected. The runner independently repeats the repository/branch/origin checks immediately before Claude invocation. Its hard model tool boundary is `Read,Write,Edit,Glob,Grep` only — no `Bash`, git, network tool, permission bypass, merge, push, or production authority. Provider/cloud credential environment variables are rejected before invocation.
-
-After Claude returns, the runner observes the complete changed-path set, including modified, deleted, and new/untracked files. It first rejects any path matching `forbiddenScope` with `FORBIDDEN_SCOPE_VIOLATION`, then rejects every remaining path outside `allowedScope`, and only then generates deterministic change-set evidence (`preHead`, `changeSetSha256`, sorted `changedPaths`). The later final implementation-route receipt recomputes the same change set from the recorded `preHead` to the exact committed implementation HEAD. This proves the committed source result matches the bounded Claude execution without storing source contents in the receipt.
-
-Deterministic surrounding work such as targeted tests, commit, push, Draft PR creation, and final audit stays outside the model process and may be performed by the existing reviewed workflow. That separation does not change the fact that Claude is the source-edit implementation executor. Codex has no write-capable runner in this release and may be used for implementation only after a separate qualification; Gemini/Antigravity remain review/alternative-analysis routes unless separately qualified. ChatGPT direct source implementation is an explicit exception, not the normal route.
-
-`provider-adapter-readiness.mjs` records this route's general auth/tool/cost readiness under `readiness.claudeImplementation`, but its repository boundary stays per-task: general readiness can never certify a specific repository/branch. Browser turn start is not universally interceptable; enforcement is completed at the receiving side because `final-pr-audit` cannot report an in-scope qualified-agent implementation `MERGE READY` without an exact final route receipt.
-
-Self-tests:
-
-```text
-node .agents/skills/preflight-audit/implementation-runner-selftest.mjs .agents/skills/preflight-audit/implementation-runner.mjs
-node .agents/skills/preflight-audit/implementation-route-receipt-selftest.mjs .agents/skills/preflight-audit/implementation-route-receipt.mjs
-node .agents/skills/preflight-audit/implementation-orchestrator-selftest.mjs .agents/skills/preflight-audit/implementation-orchestrator.mjs
-```
-
-### Bounded Agent Cycle (trial)
-
-`agent-cycle.mjs` is a thin coordinator over existing mechanisms, not a second agent platform. It reads the current approved goal and next step from Project Working Memory, rejects stale candidates, deterministically selects one eligible bounded task, and then either delegates an `INLINE` source task to the existing `implementation-orchestrator.mjs` or returns a `LONG_TASK_HANDOFF_REQUIRED` packet for the existing Job Runner path.
-
-The cycle runs at most one selected task per invocation. `PLAN` never executes source work. `EXECUTE` never gains push, merge, paid-route, production, or human-decision authority. If an inline task declares `onSuccessNextStep`, the cycle advances only the existing Project Working Memory focus after source execution; failure to update that memory is a STOP rather than a success claim. Final verification remains owned by staged reality / test-gate / final-pr-audit, so a completed cycle explicitly reports that verification is still required.
-
-```text
-<closed-agent-cycle-json-stream> | node .agents/skills/preflight-audit/agent-cycle.mjs
-node .agents/skills/preflight-audit/agent-cycle-selftest.mjs
-```
-
-The v1.1 long-task bridge stays inside this existing surface. `agent-job-bridge.mjs` does not start a second runner: `PREPARE` converts an already-selected `LONG_TASK_HANDOFF_REQUIRED` result into the existing `ai-job` Issue format, using the same poller-safe renderer as Project Intake and prefixing one bounded `AGENT_CYCLE_JOB_V1` continuation comment. It returns Issue title/label/body only; it never calls GitHub, PowerShell, Task Scheduler, Claude, push, PR, or merge itself.
-
-After the existing `ai-job-poller` owns selection/execution, use the existing `local-ai-handoff/work-state-report.mjs` as lifecycle evidence. `agent-job-bridge.mjs RESUME` accepts that current work-state evidence plus the Issue body and exact current focus, then maps only canonical stages: `QUEUED/IMPLEMENTING -> WAIT`, `REVIEW -> WAIT_HUMAN`, technical `FAILED/CONFLICT -> STOP`, human-gated `FAILED -> WAIT_HUMAN`, and `DONE -> ADVANCE_READY` (or `COMPLETED` when no next step was declared). Stale goal/next-step metadata fails closed. `ADVANCE_READY` is permission to call the existing Working Memory update path; the bridge does not create another state store.
-
-```text
-<agent-cycle LONG_TASK result> | agent-job-bridge PREPARE
-existing approved GitHub Issue-create route -> ai-job
-existing ai-job-poller -> implementation / tests / Draft PR
-existing work-state-report -> lifecycle evidence
-agent-job-bridge RESUME -> WAIT | WAIT_HUMAN | STOP | ADVANCE_READY | COMPLETED
-```
-
-Self-test:
-
-```text
-node .agents/skills/preflight-audit/agent-job-bridge-selftest.mjs
-```
-
-This trial deliberately does not add a daemon, scheduler, second state database, autonomous task invention, GitHub push/PR/merge authority, new provider route, or Scheduled Task / Windows execution-policy mutation. Candidate invention/event triggering remains a later decision only if the existing Issue queue, poller, and observers prove insufficient in real operation.
-
-### Legacy implementation audit (rescue-only, fail-closed)
-
-`.agents/skills/preflight-audit/legacy-implementation-audit.mjs` exists only to rescue-audit implementation work that was genuinely completed **before this file existed**. It is not a second normal route: new work always uses `implementation-orchestrator.mjs` -> `implementation-runner.mjs` -> `implementation-route-receipt.mjs`. This module never produces normal `executionEvidence`, never marks an `implementation-route-receipt` "verified", and never widens or substitutes for the normal path.
-
-```text
-node .agents/skills/preflight-audit/legacy-implementation-audit.mjs --input <legacy-audit-input.json> --pretty
-```
-
-- Output identity is closed: `schema: "LEGACY_IMPLEMENTATION_AUDIT_V1"`, `result: PROCEED | STOP`, and `evidenceNature: "LEGACY_CORROBORATION_NOT_RUNNER_ATTESTATION"` on every response.
-- A hard-coded `LEGACY_ELIGIBILITY_CUTOFF_UTC` (this feature's own introduction time) bounds eligibility. Every audited implementation commit's own committer timestamp must be at or before that cutoff **and** inside the caller-declared `implementationWindow`; a commit after the cutoff is `COMMIT_AFTER_CUTOFF`, never treated as legacy. New work after the cutoff MUST use the normal orchestrator/runner/receipt path instead of this audit.
-- `legacyReason` is a closed allowlist (`PRE_RECEIPT_WORK`, `NORMAL_ENTRY_MISSED_BEFORE_ENFORCEMENT`) and `implementationAI` must be exactly `claude-cli`. `main`/`master`/`trunk` branches are rejected.
-- Repository/branch/HEAD/base/scope facts are machine-derived, never taken on the caller's word: a real clean Git worktree, exact branch and `expectedHead`, the actual GitHub `origin` owner/name, `baseHead` as a genuine ancestor, and `git diff`/`git rev-list` derived `changedPaths`/commits inside `allowedScope` and outside `forbiddenScope`.
-- Claude corroboration comes only from explicit `claudeEvidenceFiles` (bounded size, SHA-256 hashed, optional `expectedEvidenceSha256` tamper check) — never from an automatic scan of arbitrary local history. Each JSONL line must parse; a genuine Claude assistant `tool_use` must edit a changed path; every audited commit must be bound to a Claude `Bash` `git commit` `tool_use` plus a matching `tool_result` containing that exact commit SHA in the same session/cwd/branch. An abbreviated Git ID (hex, >=7 and <40 chars) in the `tool_result` is accepted only when the audited full SHA starts with it AND Git in the audited repository resolves `<token>^{commit}` to exactly that 40-character commit; prefix strings alone are never trusted, and shorter, wrong, ambiguous/unresolvable, non-commit, or other-commit tokens do not bind.
-- Evidence is screened for safety: known secret/credential/browser-profile/auth-store paths are rejected, filesystem paths outside the repository must be covered by an explicit `allowedSyntheticEvidenceRoots` entry, and non-loopback network access (anything other than the same GitHub origin or `localhost`/`127.0.0.1`) is rejected. An ambiguous command fails closed rather than being guessed safe.
-- `currentHeadVerifications` (`testGate`, `canonicalContract`, `humanDecisionSync`, `finalRealityCheck`) must already be caller-provided `PASS` results at the exact `expectedHead`; this module only binds and echoes their normalized status/head, it does not fabricate them.
-
-Self-test:
-
-```text
-node .agents/skills/preflight-audit/legacy-implementation-audit-selftest.mjs .agents/skills/preflight-audit/legacy-implementation-audit.mjs
-```
+### Machine-readable capacity, routing, and execution mechanics
+
+Detailed CLI usage, JSON schemas, and self-test commands for capacity observation (`ai-capacity-observer.mjs`), bounded task handoff (`ai-task-router.mjs`), the implementation route receipt (`implementation-route-receipt.mjs`), provider inventory (`ai-provider-inventory.mjs`), adapter qualification/readiness (`provider-adapter-qualification.mjs`, `provider-adapter-readiness.mjs`), the Claude subscription-only runner (`claude-subscription-runner.mjs`), the executable implementation route (`implementation-orchestrator.mjs` / `implementation-runner.mjs`), the Bounded Agent Cycle trial (`agent-cycle.mjs` / `agent-job-bridge.mjs`), and the rescue-only Legacy implementation audit (`legacy-implementation-audit.mjs`) live in **`.agents/skills/preflight-audit/REFERENCE.md`**. Load that file before operating any of these mechanisms; it is reference detail, not a second policy source.
+
+These mandatory boundaries are never relaxed by that reference detail, and remain enforced as described here regardless of which mechanism is used:
+
+- A route/adapter never gains authority merely by existing; it must independently pass the stated availability/safety/environment/data-class/cost checks before it is `AVAILABLE`.
+- Human-gated task kinds/permissions, protected/real data, merge, production, destructive operations, recurring-cost adoption, external-data-route changes, lifecycle-responsibility changes, and business-policy decisions always return `STOP / HUMAN_GATE_REQUIRED`; no router, adapter, or runner may authorize them.
+- `implementation`, `bugfix`, `refactor`, and `design-with-source-write` require a route receipt; a `direct-browser` executor is rejected by default and only a closed, justified exception plus `evidenceConfirmed: true` can allow it.
+- `main`/`master`/`trunk` branches, protected/real data classes, unknown cost, and any `merge`/`production`/`destructive` requested authority are always rejected by the route receipt, the orchestrator, and the legacy audit.
+- The Claude subscription-only runner and the executable implementation route only ever use an attested, isolated executable copy with `Read,Write,Edit,Glob,Grep` tool access — never `Bash`, git, network, permission bypass, merge, push, or production authority — and provider/cloud credential environment variables are rejected before invocation.
+- The Legacy implementation audit is rescue-only for implementation genuinely completed before it existed; it never produces normal `executionEvidence`, never marks a route receipt verified, and never substitutes for the normal orchestrator -> runner -> receipt path for new work.
+- The Bounded Agent Cycle trial never gains push/merge/paid-route/production/human-decision authority and adds no daemon, scheduler, second state database, or new provider route.
+- Full self-test commands for every one of these mechanisms are listed in `REFERENCE.md` and must still be run when the corresponding mechanism is touched.
 
 ## Execution / Evidence Location
 
@@ -423,7 +211,7 @@ Before choosing implementation scope, treat the committed `PROJECT_CONTEXT.json.
 node .agents/skills/handoff/canonical-contract-gate.mjs --context-file PROJECT_CONTEXT.json --state-json <contract-work-state-json> --pretty
 ```
 
-Proceed only on `contractGate=PASS`. An old file may be inspected as history, but a SUPERSEDED/HISTORICAL/DRAFT artifact must not appear in `usedSpecIds`. If the selected implementation target differs from the CURRENT artifact for that slot, stop before implementation and correct the scope. This is an upstream scope check, not another build/test pass, and it must not create a new human confirmation on the normal PASS path.
+Proceed only on `contractGate=PASS`. An old file may be inspected as history, but a SUPERSEDED/HISTORICAL/DRAFT artifact must not appear in `usedSpecIds`. If the selected implementation target differs from the CURRENT artifact for that slot, stop before implementation and correct the scope. This is an upstream scope check, not another build/test pass, and it must not create a new human confirmation on the normal PASS path. If any selected/used CURRENT target is a `visual.baseline: REFERENCE_IMAGE` design, include `taskTypes` with `UI_REFERENCE_REPRODUCTION`; omitting it or declaring only plain `UI` is a STOP (`UI_REFERENCE_REPRODUCTION_CLASSIFICATION_REQUIRED` / `UI_REFERENCE_REPRODUCTION_MISCLASSIFIED`) independent of Functional Gate result. Legacy work states without `taskTypes` remain valid only while no selected/used CURRENT artifact is a REFERENCE_IMAGE design.
 
 When `canonicalContract.requiredValidation` includes `human-decision-sync`, also read `PROJECT_CONTEXT.json.humanDecisionSync` before implementation. Use `.agents/skills/handoff/human-decision-sync.mjs` for any decision IDs that the intended work relies on. Only `CONFIRMED` decisions may be selected as current authority; `DEPRECATED`, `PROPOSED`, and `UNRESOLVED` selections are STOP. The snapshot from the same registry supplies current state and next action so conversation memory or older documents cannot silently override the latest explicit human decision. Normal PASS adds no human confirmation.
 
@@ -537,6 +325,7 @@ The observer is read-only and does not create a new classifier. Its input contai
 
 - Existing `STOP_NEW_WORK`, stagnation `STOP/BLOCKED/WAIT_HUMAN`, and Foundation `UPDATE/PARTIAL_RESUME/STOP` states are surfaced unchanged.
 - Missing or invalid WIP/Foundation evidence is shown as `UNKNOWN`, never silently healthy.
+- An optional per-repository `improvementFollowup` field accepts an already-computed `improvement-followup.mjs` report (see "Machine-readable improvement followup" above); it is opt-in and omitting it does not add attention/totals to a repository that has not adopted it yet.
 - Merge authority, product priority, and repository-local gates remain separate.
 - Do not run application tests or add hosted schedules/services merely to produce the portfolio view.
 
@@ -569,11 +358,19 @@ Required planning inputs:
 - after two same-class resolution-intervention failures, a third resolution intervention also requires `forced-reflection-reviewed yes`, `reflection-recorded yes`, and `reflection-basis` as `new-observation`, `new-hypothesis`, `new-route`, `materially-changed-condition`, or `insufficient-observation`.
 - when recovering from an execution timeout, `execution-outcome=timeout`, `timed-out-process-state running|exited|unknown`, `recovery-scope poll-existing|failed-only|split-command|whole-phase|root-cause-analysis|route-reselection`, `completed-evidence-present yes|no`, and `same-command-timeout-count` are required.
 
+### Execution-class boundary
+
+Always classify `--execution-class` as exactly one of `standard`, `short-command`, or `long-running` (default `standard`); any other value fails closed with `EXECUTION_CLASS_INVALID`.
+
+- `short-command` is for help/version/status/list/read-only probes expected to finish promptly. If AI-only work reports `short-command` still `running`, the gate STOPs with `SHORT_COMMAND_STILL_RUNNING_TERMINATE_AND_INSPECT`: terminate/inspect the exact AI-owned process, never background-wait or convert it into a long-task polling loop.
+- If a `short-command` times out while the process is still running, the gate STOPs with `SHORT_COMMAND_TIMEOUT_TERMINATE_AND_INSPECT` regardless of `recovery-scope`; `poll-existing` is never accepted as recovery for this class.
+- `standard` and `long-running` preserve the existing poll-existing/timeout-recovery behavior below unchanged.
+
 ### Timeout recovery boundary
 
 Treat a tool/command timeout as an execution-state problem, not permission to blindly restart the whole phase.
 
-- If the timed-out process is still running, inspect/poll that existing process; a duplicate launch is blocked with `TIMEOUT_PROCESS_STILL_RUNNING_POLL_REQUIRED`.
+- If the timed-out process is still running, inspect/poll that existing process; a duplicate launch is blocked with `TIMEOUT_PROCESS_STILL_RUNNING_POLL_REQUIRED` (for `standard`/`long-running`) or `SHORT_COMMAND_TIMEOUT_TERMINATE_AND_INSPECT` (for `short-command`, where polling is never accepted).
 - If process state is unknown, stop the retry and inspect it first (`TIMEOUT_PROCESS_STATE_UNKNOWN_INSPECT_REQUIRED`).
 - If the process exited but exact current-work PASS evidence already exists, a whole-phase restart is blocked; resume the missing/failed portion instead (`TIMEOUT_COMPLETED_EVIDENCE_REUSE_REQUIRED`).
 - After the same command has timed out twice, another exited-process retry must split the command, perform root-cause analysis, or reselect the route. An unchanged failed-only/whole-phase retry is blocked.
@@ -744,7 +541,9 @@ Escalation is fail-closed:
 - a valid human gate with `--continuation-action wait-human` pauses the checkpoint clock;
 - `work-state=incomplete --human-gate none --continuation-action report-only` stops with `SAFE_WORK_CONTINUATION_REQUIRED`;
 - `work-state=incomplete --human-gate none --continuation-action wait-human` stops with `UNNECESSARY_HUMAN_WAIT`;
-- genuine merge/production/destructive/value/ownership gates still use `human-gate=required` and may wait.
+- A pause for human input requires `--human-gate required --human-gate-kind <specific-kind>` for **every** completion target; an omitted/`unspecified` kind is rejected (`HUMAN_GATE_KIND_REQUIRED`) rather than becoming an unearned human wait. A real security/privacy/protected-data or unapproved incremental-cost risk blocks the unsafe operation first; AI investigates and fixes safely where possible, and asks the human only if policy, risk acceptance, cost, or other value decisions truly remain.
+- Crashes, disconnected tools, test failures, duplicated verification, stale Git state, and provider capacity are AI-owned diagnosis/recovery work, **not** human-gate kinds. A technical STOP prevents unsafe or unchanged retries, but is not human permission to quit; reuse the same job/checkpoint or an already-qualified zero-new-cost route when safe. Never skip a distinct security/privacy/data-loss gate merely because its property was checked elsewhere.
+- Genuine merge/production/destructive/value/ownership gates still use an explicit `human-gate-kind` and may wait; merge authorization is valid only at the exact audited pre-merge handoff.
 - For an explicit “up to merge handoff” target, use `--completion-target pre-merge` plus `--test-gate-state`, `--commit-state`, `--push-state`, `--pr-state`, `--pr-draft`, `--final-audit-state`, and `--exact-pr-head-state`. `PRE_MERGE_READY_WAITING_MERGE_AUTH` is valid only after all technical stages are complete and `--human-gate-kind merge-authorization` is present.
 - Output `handoffClass` separates `AI_OWNED`, `HUMAN_REQUIRED`, `MERGE_AUTH_REQUIRED`, and `COMPLETE`. A technical gate STOP remains `AI_OWNED`; it blocks that unsafe attempt but returns control to diagnosis/repair/route reselection rather than becoming a human handoff.
 - `PRE_MERGE_CONTINUATION_REQUIRED` blocks report-only termination before the target is reached. A merge-authorization wait before the technical stages are complete is rejected with `PRE_MERGE_MERGE_GATE_PREMATURE`.
@@ -874,6 +673,19 @@ Observer self-test:
 ```text
 node .agents/skills/preflight-audit/wip-review-queue-observer-selftest.mjs .agents/skills/preflight-audit/wip-review-queue-observer.mjs
 ```
+
+## Machine-readable improvement followup (Issue #280 Phase 1, bounded source-only trial)
+
+- Existing `improvement-followup.mjs` and `improvement-followup-synthetic.mjs` own source-only candidate classification, synthetic rehearsal and bounded publication/readback checks. Do not start an actual GitHub POST, external network collector or AI provider from their plan alone.
+- Missing/ambiguous owner, protected content, stale/untrusted evidence and out-of-scope tasks fail closed. Cross-project findings never modify the active task or another repository's source. The exact phase-specific normative inputs, STOP codes and invocation examples are preserved verbatim in [REFERENCE.md](REFERENCE.md) under the Issue #280 headings; consult before use.
+
+## Scope Boundary Gate (Issue #283, part A)
+
+- Before a GitHub Issue/PR or job write, use the existing read-only `scope-boundary-gate.mjs` to check exact project, authorized task, repository/branch and allowed paths. The full normative contract remains in [REFERENCE.md](REFERENCE.md) under this exact heading; a planning result never grants source or merge authority.
+
+## Writer Lease Guard (Issue #283, parts C and D)
+
+- Before source/PR writes on a shared task, use the existing read-only `writer-lease-guard.mjs` with live ownership claims; two active writers or unavailable ownership evidence fail closed. The guard is NOT an atomic global lease store: unobserved concurrent writers remain `COVERAGE_UNKNOWN`. The original normative conditions and evidence shape are preserved in [REFERENCE.md](REFERENCE.md).
 
 ## Required Semantic Checks
 

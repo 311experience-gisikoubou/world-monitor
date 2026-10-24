@@ -52,7 +52,7 @@ export function buildPortfolioReport(manifest, { nowMs = Date.now() } = {}) {
   if (!Array.isArray(manifest.repositories) || manifest.repositories.length === 0 || manifest.repositories.length > MAX_REPOS) return fail('PORTFOLIO_REPOSITORIES_INVALID');
   const seen = new Set();
   const repos = [];
-  const totals = { repositories: manifest.repositories.length, wipStop: 0, wipUnknown: 0, stagnationStop: 0, stagnationWaitHuman: 0, foundationCurrent: 0, foundationUpdate: 0, foundationPartialResume: 0, foundationStop: 0, foundationUnknown: 0 };
+  const totals = { repositories: manifest.repositories.length, wipStop: 0, wipUnknown: 0, stagnationStop: 0, stagnationWaitHuman: 0, foundationCurrent: 0, foundationUpdate: 0, foundationPartialResume: 0, foundationStop: 0, foundationUnknown: 0, improvementFollowupNewCandidates: 0, improvementFollowupNeedsVerification: 0, improvementFollowupUnknown: 0 };
   for (const item of manifest.repositories) {
     const repository = item?.repository;
     if (typeof repository !== 'string' || !REPO_RE.test(repository)) return fail('PORTFOLIO_REPOSITORY_INVALID', { repository: repository ?? null });
@@ -90,7 +90,28 @@ export function buildPortfolioReport(manifest, { nowMs = Date.now() } = {}) {
       if (item.foundation.state === 'PARTIAL_RESUME') { totals.foundationPartialResume += 1; attention.push('FOUNDATION_PARTIAL_RESUME'); }
       if (item.foundation.state === 'STOP') { totals.foundationStop += 1; attention.push('FOUNDATION_STOP'); }
     } else { totals.foundationUnknown += 1; attention.push('FOUNDATION_UNKNOWN'); }
-    repos.push({ repository, wip, stagnation, foundation, attention: [...new Set(attention)] });
+    // Opt-in only: the Phase 1 (Issue #280) improvement-followup observer is
+    // a bounded source-only trial, so an absent `improvementFollowup` field
+    // does not add attention/totals noise to repositories that have not
+    // adopted it yet. When present, this validates the already-computed
+    // `improvement-followup.mjs` report shape; it never re-derives it from
+    // raw evidence here (no network/GitHub access in this aggregator).
+    let followup = null;
+    if (item.improvementFollowup !== undefined) {
+      const evidence = item.improvementFollowup;
+      if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return fail('PORTFOLIO_IMPROVEMENT_FOLLOWUP_INVALID', { repository });
+      if (evidence.repository !== repository) return fail('PORTFOLIO_IMPROVEMENT_FOLLOWUP_REPOSITORY_MISMATCH', { repository });
+      if (evidence.ok === true && validInt(evidence.newCandidateCount) && validInt(evidence.needsVerificationCount)) {
+        followup = { status: 'CURRENT', newCandidateCount: evidence.newCandidateCount, needsVerificationCount: evidence.needsVerificationCount, code: null };
+        if (followup.newCandidateCount > 0) { totals.improvementFollowupNewCandidates += 1; attention.push('IMPROVEMENT_FOLLOWUP_NEW_CANDIDATES'); }
+        if (followup.needsVerificationCount > 0) { totals.improvementFollowupNeedsVerification += 1; attention.push('IMPROVEMENT_FOLLOWUP_NEEDS_VERIFICATION'); }
+      } else {
+        followup = { status: 'UNKNOWN', newCandidateCount: null, needsVerificationCount: null, code: evidence.code || 'IMPROVEMENT_FOLLOWUP_EVIDENCE_INVALID' };
+        totals.improvementFollowupUnknown += 1;
+        attention.push('IMPROVEMENT_FOLLOWUP_UNKNOWN');
+      }
+    }
+    repos.push({ repository, wip, stagnation, foundation, ...(followup ? { improvementFollowup: followup } : {}), attention: [...new Set(attention)] });
   }
   const attentionRepos = repos.filter(repo => repo.attention.length > 0).length;
   const summary = `${repos.length} repos; attention ${attentionRepos}; WIP stop ${totals.wipStop}; stagnation stop ${totals.stagnationStop}; Foundation update/partial/stop ${totals.foundationUpdate}/${totals.foundationPartialResume}/${totals.foundationStop}`;

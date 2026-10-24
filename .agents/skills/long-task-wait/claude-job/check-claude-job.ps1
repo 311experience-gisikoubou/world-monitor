@@ -65,6 +65,19 @@ $identityPending = $st.state -eq 'STARTING' -and -not $startTicks -and $elapsed 
 if ($active -and -not $alive -and -not $identityPending) { $view = 'LOST' }
 elseif ($active -and $alive -and $elapsed -gt $LongMinutes) { $view = 'LONG_RUNNING' }
 
+# Source DONE is not post-job completion. Preserve original job records;
+# derive the handoff view from the separately recorded review result.
+if ((Prop $st 'post_job_review') -eq $true -and $view -eq 'READY_FOR_REVIEW') {
+    $reviewState = [string](Prop $st 'post_job_review_state')
+    $view = switch ($reviewState) {
+        'COMPLETED' {
+            $publication = Prop $st 'post_job_publication'
+            if ($publication) { 'PR_FINAL_AUDIT_REQUIRED' } else { 'DRAFT_PR_HANDOFF_REQUIRED' }
+        }
+        'STOP' { 'POST_JOB_REVIEW_STOP' }
+        default { 'POST_JOB_REVIEW_PENDING' }
+    }
+}
 # Read-only no-observable-progress candidate signal. See NO_PROGRESS_WARNING limitation
 # note above: this is never an automatic kill trigger and this script never stops anything.
 $progressFiles = @('status.json','instruction-clarity.json','orchestrator.json','stderr.log','test.log','result.json','task.json') |
@@ -119,6 +132,12 @@ switch ($view) {
     'CLAUDE_FAILED' { Write-Host 'Inspect orchestrator.json/stderr and continue only the remaining in-scope work.' }
     'GATE_FAILED' { Write-Host 'Investigate scope/test failure; do not discard changes automatically.' }
     'GATE_INCOMPLETE' { Write-Host 'Provide the missing test gate before treating the job as complete.' }
+    'PR_FINAL_AUDIT_REQUIRED' { Write-Host 'AI final-audit owner: reconcile recorded PR/current HEAD with fresh GitHub metadata; do not create duplicate PR.' }
+    'DRAFT_PR_HANDOFF_REQUIRED' {
+        Write-Host ("AI publication owner: verify post-job-review-receipt.json against current HEAD, then create Draft PR. HEAD: " + (Prop $st 'post_job_review_head'))
+    }
+    'POST_JOB_REVIEW_PENDING' { Write-Host 'AI post-job owner: continue bounded audit observation; source DONE is not whole-task completion.' }
+    'POST_JOB_REVIEW_STOP' { Write-Host ("AI-owned repair required; no human merge gate: " + (Prop $st 'post_job_review_code')) }
     'READY_FOR_REVIEW' { Write-Host 'Job-local gates passed. Return to the normal Foundation test/final-audit/PR workflow.' }
 }
 if ($noProgressWarning) {

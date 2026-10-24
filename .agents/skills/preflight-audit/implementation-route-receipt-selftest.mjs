@@ -12,7 +12,7 @@ const gate = path.resolve(gateArg);
 const gateDir = path.dirname(gate);
 const { evaluateReceipt, verifyFinalReceipt } = await import(pathToFileURL(gate).href);
 const { computeChangeSetSha256, readHeadSha } = await import(pathToFileURL(path.join(gateDir, 'implementation-runner.mjs')).href);
-const { computeConstraintsDigest } = await import(pathToFileURL(path.join(gateDir, 'research-gate.mjs')).href);
+const { computeConstraintsDigest, CHECKLIST_IDS, TRIGGER_KEYS, BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE } = await import(pathToFileURL(path.join(gateDir, 'research-gate.mjs')).href);
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'route-receipt-'));
 let seq = 0;
@@ -110,6 +110,25 @@ function researchFor(taskId, overrides = {}) {
       constraints,
       humanTopConditions: humanTopConditions.map((item) => ({ id: item.id, statement: item.statement })),
     },
+  };
+}
+function trialResearchFor(taskId, overrides = {}) {
+  const repository = overrides.repository || baseRepo;
+  const scope = overrides.scope || ['src/widget.ts'];
+  const proposalId = overrides.proposalId || 'proposal-1';
+  const constraints = overrides.constraints || [];
+  const triggers = Object.fromEntries(TRIGGER_KEYS.map((key) => [key, key === 'osBrowserCompatibility']));
+  return {
+    evidence: {
+      schemaVersion: 1,
+      evidenceBinding: { taskId, proposalId, repository, scope, constraints, constraintsDigestSha256: computeConstraintsDigest(constraints), assessedAtUtcMs: Date.now(), maxEvidenceAgeMs: 24 * 60 * 60 * 1000 },
+      triggers,
+      noTriggerAssessment: null,
+      checklist: CHECKLIST_IDS.map((id) => ({ id, status: id === 'browserCompatibility' ? 'UNKNOWN' : 'PASS', applicable: true, justification: `Trial evidence for ${id}.`, ...(id === 'browserCompatibility' ? {} : { primarySourceRef: 'https://example.invalid/evidence' }) })),
+      humanTopConditions: [],
+      deepResearch: { primary: { providerId: 'provider-a', researchSessionRef: 'research-session://primary/a', evidenceRef: 'research-note://primary' }, adversarial: { present: true, providerId: 'provider-b', researchSessionRef: 'research-session://adversarial/b', distinctFromPrimary: true, evidenceRef: 'research-note://adversarial' } },
+    },
+    context: { proposalId, constraints, humanTopConditions: [] },
   };
 }
 
@@ -225,6 +244,15 @@ expect(preInput({ executionEvidence: { preHead: EVIDENCE_HEAD, changeSetSha256: 
 expect(preInput({ research: undefined }), [], 'SCHEMA_INVALID', 2);
 expect(finalInput({ research: undefined }), [], 'SCHEMA_INVALID', 2);
 
+// TRIAL_REQUIRED remains blocked unless the exact synthetic-only mode is present.
+const trialReceipt = { dataClass: 'synthetic', trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE, research: trialResearchFor('task-1') };
+expect(preInput({ dataClass: 'synthetic', research: trialResearchFor('task-1') }), [], 'RESEARCH_GATE_BLOCKED', 2);
+expect(preInput(trialReceipt), [], 'ROUTE_AUTHORIZED', 0);
+expect(finalInput(trialReceipt), [], 'FINAL_RECEIPT_ISSUED', 0);
+expect(preInput({ ...trialReceipt, dataClass: 'source-only' }), [], 'RESEARCH_GATE_BLOCKED', 2);
+expect(preInput({ ...trialReceipt, dataClass: 'public' }), [], 'RESEARCH_GATE_BLOCKED', 2);
+expect(preInput({ ...trialReceipt, trialWriteMode: 'UNBOUNDED' }), [], 'SCHEMA_INVALID', 2);
+
 // malformed research context (missing proposalId) must fail schema-closed
 expect(preInput({ research: { evidence: researchFor('task-1').evidence, context: { constraints: [], humanTopConditions: [] } } }), [], 'SCHEMA_INVALID', 2);
 
@@ -303,6 +331,46 @@ expect(finalInput({
   '--expect-head', realImplementationHead, '--repo-root', repoDir,
 ], 'EXECUTION_EVIDENCE_CHANGE_SET_MISMATCH', 2);
 
+// This real fixture committed exactly two paths (src/new-file.ts, src/widget.ts); recomputed.changedPaths
+// is their canonical (sorted) order. Even with the correct, untampered changeSetSha256, a receipt whose
+// recorded changedPaths doesn't exactly match that canonical order/entries must still be rejected -- the
+// hash check alone cannot catch a mismatched changedPaths listing.
+assert(realChangeSet.changedPaths.length === 2, 'expected the fixture commit to change exactly two paths');
+const realChangedPathsArgs = [
+  '--expect-owner', 'acme', '--expect-name', 'widgets', '--expect-branch', 'feat/widget',
+  '--expect-head', realImplementationHead, '--repo-root', repoDir,
+];
+
+// (1) replace one recorded changed path with an unrelated path, keeping the correct hash
+expect(finalInput({
+  implementationHead: realImplementationHead,
+  executionEvidence: {
+    preHead: realPreHead,
+    changeSetSha256: realChangeSet.changeSetSha256,
+    changedPaths: [realChangeSet.changedPaths[0], 'src/unrelated-path.ts'],
+  },
+}), realChangedPathsArgs, 'EXECUTION_EVIDENCE_CHANGE_SET_MISMATCH', 2);
+
+// (2) omit one recorded changed path, keeping the correct hash
+expect(finalInput({
+  implementationHead: realImplementationHead,
+  executionEvidence: {
+    preHead: realPreHead,
+    changeSetSha256: realChangeSet.changeSetSha256,
+    changedPaths: [realChangeSet.changedPaths[0]],
+  },
+}), realChangedPathsArgs, 'EXECUTION_EVIDENCE_CHANGE_SET_MISMATCH', 2);
+
+// (3) reorder the same two recorded changed paths, keeping the correct hash
+expect(finalInput({
+  implementationHead: realImplementationHead,
+  executionEvidence: {
+    preHead: realPreHead,
+    changeSetSha256: realChangeSet.changeSetSha256,
+    changedPaths: [...realChangeSet.changedPaths].reverse(),
+  },
+}), realChangedPathsArgs, 'EXECUTION_EVIDENCE_CHANGE_SET_MISMATCH', 2);
+
 // wrong branch at verification time
 expect(realFinalInput, [
   '--expect-owner', 'acme', '--expect-name', 'widgets', '--expect-branch', 'feat/other',
@@ -325,6 +393,20 @@ const directVerifiedNoRepo = verifyFinalReceipt(directDecision, {
   owner: 'acme', name: 'widgets', branch: 'feat/widget', head: realImplementationHead,
 });
 assert(directVerifiedNoRepo.code === 'REPO_ROOT_REQUIRED_FOR_EXECUTION_EVIDENCE', 'omitting repoRoot for a qualified-agent receipt must fail closed');
+
+const trialFinalDecision = evaluateReceipt({
+  ...realFinalInput,
+  dataClass: 'synthetic',
+  trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE,
+  research: trialResearchFor('task-1'),
+});
+assert(trialFinalDecision.result === 'PASS' && trialFinalDecision.trialWriteMode === BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE,
+  'final receipt must preserve an exact bounded synthetic trial mode');
+const trialReceiverExpected = { owner: 'acme', name: 'widgets', branch: 'feat/widget', head: realImplementationHead, repoRoot: repoDir };
+assert(verifyFinalReceipt(trialFinalDecision, trialReceiverExpected).result === 'MERGE_READY',
+  'final verification must independently recheck an intact bounded trial mode');
+assert(verifyFinalReceipt({ ...trialFinalDecision, trialWriteMode: null }, trialReceiverExpected).code === 'RESEARCH_EVIDENCE_MISSING_OR_FAILED',
+  'final verification must reject a stripped bounded trial mode');
 
 // Receiving-side checks: successful issuance and a valid committed hash do not
 // authorize missing, altered or stale Research evidence.

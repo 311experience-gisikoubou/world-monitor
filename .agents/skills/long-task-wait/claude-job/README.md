@@ -71,7 +71,7 @@ or from any `LONG_RUNNING`/`NO_PROGRESS_WARNING` warning.
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\run-claude-job.ps1 `
   -RepoPath C:\dev\repo -PromptFile .\task.md -InstructionClarityFile .\clarity.json -ResearchEvidenceFile .\research.json -TaskName task `
-  -ScopePaths 'src/**','README.md' -TestCommand 'npm test'
+  -ScopePaths 'src/**','README.md' -TestCommand 'npm test' -TargetIssueNumber 123
 
 powershell -NoProfile -ExecutionPolicy Bypass -File .\check-claude-job.ps1 `
   -RepoPath C:\dev\repo -JobId 20260923-001
@@ -84,6 +84,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\run-claude-job.ps1 `
 powershell -NoProfile -ExecutionPolicy Bypass -File .\stop-claude-job.ps1 `
   -RepoPath C:\dev\repo -JobId 20260923-001 -Reason 'operator requested stop'
 ```
+
+The Issue number (or a nonzero `-TargetPrNumber`) is required on every new source-writing launch; the launcher rejects legacy targetless jobs with `TARGET_IDENTITY_REQUIRED` before creating a worktree. Continuations inherit the same target identity from their stored job status; old targetless jobs cannot be resumed as writers without an already-recorded target. This requirement is intentionally fail-closed, not a prompt for human intervention.
 
 Continuation does not use Claude session persistence. If the previous attempt left in-scope uncommitted work,
 the launcher makes a normal WIP checkpoint commit on the existing job branch before starting the next bounded run.
@@ -123,6 +125,12 @@ Verified on the target Windows machine with Windows PowerShell 5.1 and the real 
 - real job `20260923-007` reached `READY_FOR_REVIEW` with orchestrator, Claude result, scope, and test all PASS.
 A previous detached-child prototype became `LOST`; the launcher now keeps the worker inside the tracked process session to remove that failure mode.
 
+## Cross-writer coordination (Issue #283)
+
+This job runner remains the single mechanism that manages its own `runner_pid`, `running.lock`, and process lifecycle; nothing here changes that. When another human or AI needs to decide whether it is safe to also write to the same repository/PR/Issue while a job may be active, it can turn this job's own already-recorded `status.json` evidence (`runner_pid`, `runner_process_start_utc_ticks`, current `state`) into one `PID_LEASE` claim and evaluate it read-only with the existing `.agents/skills/preflight-audit/writer-lease-guard.mjs`. That guard never starts, stops, or inspects this runner's process itself; it only turns already-collected evidence (which the caller must independently re-verify as live/dead, exactly like `stop-claude-job.ps1` already does before acting) into a single-writer lease decision. See `preflight-audit/SKILL.md` ("Writer Lease Guard") for the evidence shape.
+
+The separate `writer-lease-guard.mjs` still provides read-only advisory evaluation only. The existing `writer-claim-store.mjs` now provides actual OS-atomic local Repo+PR/Issue/branch reservation for `run-claude-job.ps1` launches explicitly bound to a nonzero `-TargetPrNumber` and/or `-TargetIssueNumber`; continuation refuses a mismatch with target IDs recorded in `status.json`. A claim is held from after Research Gate and before job/source writes until the runner returns, and is released only by its owning job token in `finally`. Synthetic Windows PowerShell 5.1 real-process tests are in `writer-claim-launcher-selftest.mjs` (`node .../writer-claim-launcher-selftest.mjs --all`). This protection covers target-bound launcher calls on the same Windows user/PC. Legacy targetless launcher calls now fail closed without starting a writer; alternative launch paths, other machines/users, direct ChatGPT/GitHub editing and unqualified providers are still OUT OF COVERAGE. Global single-writer safety remains `COVERAGE_UNKNOWN`. The Windows PowerShell 5.1 regression includes a targetless rejection and the original nine claim tests. Do not interpret this local guard as a repo-wide enforced lock or as merge permission.
+
 ## Not performed
 
 These scripts do not merge, push, force-push, reset, delete worktrees/branches/logs, or perform production operations.
@@ -130,3 +138,37 @@ After `READY_FOR_REVIEW`, return to the existing Foundation test-gate, staged re
 and post-merge verification flow. `stop-claude-job.ps1` is a manual, explicitly-named safety valve only; it is never
 auto-invoked by `check-claude-job.ps1`, `LONG_RUNNING`, or `NO_PROGRESS_WARNING`, and it does not add a second Claude
 execution route.
+
+## Opt-in post-job review and Draft publication (Issue #332)
+
+`-PostJobReview` connects the existing outer test gate to a bounded no-tool,
+same-provider/different-session audit while the original atomic claim is held.
+Only audit PASS with no findings can produce an ordinary commit and
+`post-job-review-receipt.json`. An audit STOP/pending result is AI-owned and
+must not be presented as human merge readiness. The launcher emits a bounded
+`POST_JOB_HANDOFF` with the exact committed HEAD and receipt path.
+
+Existing poller configuration `PostJobReviewEnabled: true` forwards the opt-in
+through both the raw launcher and the existing LocalOps bridge. Default is
+false; no scheduler is installed or enabled. Unsupported deployed launchers or
+LocalOps fixed runners fail closed. Before its existing push/Draft PR step, the
+poller re-evaluates the original source receipt, audit evidence, test-log digest,
+clean worktree and exact committed bytes. After creation it checks the actual
+GitHub Draft/open/base/branch/HEAD metadata and remote branch SHA.
+
+**Current coverage:** one initial successful attempt only. Retry checkpoints
+and continuations stop with `POST_JOB_HISTORY_REQUIRES_QUALIFIED_CHAIN`;
+the final attempt's qualified receipt cannot prove earlier checkpoint history.
+The existing bounded test-repair runner is unchanged, but its multi-attempt
+history still needs independent chaining before automatic publication.
+No whole-Issue completion, global provenance or merge permission is implied.
+
+Regression commands:
+- `node .agents/skills/long-task-wait/claude-job/post-job-review-selftest.mjs`
+- `node .agents/skills/local-ai-handoff/work-state-report-selftest.mjs`
+- `node foundation-job-runner/run-foundation-job-selftest.mjs` (Windows)
+
+Fixture reviewer/process mocks are not real E2E evidence. The actual production
+opt-in probe stopped at Claude provider capacity with no source writes.
+Issue #332 stays open until a genuine isolated implementation/test/repair/audit/
+Draft PR run reaches final exact-HEAD review without additional human directions.

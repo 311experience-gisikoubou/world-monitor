@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
-const gateArg = process.argv[2];
-if (!gateArg) throw new Error('gate path required');
-const gate = resolve(gateArg);
+const gate = process.argv[2]
+  ? process.argv[2]
+  : fileURLToPath(new URL('./operation-preflight.mjs', import.meta.url));
 
 function run(extra) {
   return spawnSync(process.execPath, [gate, '--json', ...extra], { encoding: 'utf8' });
@@ -107,7 +107,9 @@ expectStop([...aiOnlyComplexCompact, '--progress-update-sent', 'yes'], 'PROGRESS
 expectStop([...aiOnlyBase, '--progress-update-complete', 'yes'], 'PROGRESS_ATTESTATION_WITHOUT_EVENT');
 expectStop([...routineBase, '--progress-update-complete', 'yes'], 'COMPACT_PROGRESS_ATTESTATION_AI_ONLY');
 
-
+expectProceed([...aiOnlyBase, '--execution-class', 'short-command', '--execution-outcome', 'success']);
+expectStop([...aiOnlyBase, '--execution-class', 'short-command', '--execution-outcome', 'running'], 'SHORT_COMMAND_STILL_RUNNING_TERMINATE_AND_INSPECT');
+expectStop([...routineBase, '--execution-class', 'unsupported'], 'EXECUTION_CLASS_INVALID');
 
 const timeoutBase = [
   ...aiOnlyBase,
@@ -127,6 +129,9 @@ expectProceed([...timeoutBase, '--timed-out-process-state', 'exited', '--recover
 expectStop([...timeoutBase, '--same-command-timeout-count', '2', '--timed-out-process-state', 'exited', '--recovery-scope', 'failed-only', '--completed-evidence-present', 'yes'], 'TIMEOUT_REPEATED_RETRY_REQUIRES_SPLIT_OR_ROUTE_CHANGE');
 expectProceed([...timeoutBase, '--same-command-timeout-count', '2', '--timed-out-process-state', 'exited', '--recovery-scope', 'split-command', '--completed-evidence-present', 'yes']);
 expectStop([...aiOnlyBase, '--timed-out-process-state', 'exited'], 'TIMEOUT_RECOVERY_FIELDS_WITHOUT_TIMEOUT');
+
+expectStop([...timeoutBase, '--execution-class', 'short-command', '--timed-out-process-state', 'running', '--recovery-scope', 'poll-existing', '--completed-evidence-present', 'yes'], 'SHORT_COMMAND_TIMEOUT_TERMINATE_AND_INSPECT');
+expectStop([...timeoutBase, '--execution-class', 'short-command', '--timed-out-process-state', 'running', '--recovery-scope', 'whole-phase', '--completed-evidence-present', 'yes'], 'SHORT_COMMAND_TIMEOUT_TERMINATE_AND_INSPECT');
 
 expectStop([
   '--scope', 'network',

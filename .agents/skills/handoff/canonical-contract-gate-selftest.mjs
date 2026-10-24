@@ -140,6 +140,49 @@ const refManifest=manifest({canonicalContract:{
     visual:{designId:'home-ui-v2',version:'2',scope:['home'],baseline:'REFERENCE_IMAGE'},
   }],
 }});
+
+// taskTypes classification: a selected/used CURRENT REFERENCE_IMAGE design demands explicit UI_REFERENCE_REPRODUCTION,
+// and omission/misclassification is an actual STOP even when functionalGate is PASS.
+function refState(overrides={}){
+  return {
+    schemaVersion:1,repository:'311experience-gisikoubou/dental-delivery-billing',
+    contractId:refManifest.canonicalContract.contractId,contractVersion:refManifest.canonicalContract.contractVersion,
+    targetSelection:[{slot:'home-ui',artifactId:'home-ui-v2'}],usedSpecIds:['home-ui-v2'],functionalGate:'PASS',...overrides,
+  };
+}
+
+// Negative: taskTypes omitted entirely while a CURRENT REFERENCE_IMAGE design is selected/used.
+const missingTaskType=validateCanonicalContract(refManifest,refState());
+assert.equal(missingTaskType.result,'STOP');
+assert.equal(missingTaskType.code,'UI_REFERENCE_REPRODUCTION_CLASSIFICATION_REQUIRED');
+assert.equal(missingTaskType.functionalGate,'PASS');
+assert.deepEqual(missingTaskType.referenceImageArtifactIds,['home-ui-v2']);
+
+// Negative: misclassified as plain UI instead of UI_REFERENCE_REPRODUCTION, still STOP even on functionalGate PASS.
+const misclassified=validateCanonicalContract(refManifest,refState({taskTypes:['UI']}));
+assert.equal(misclassified.result,'STOP');
+assert.equal(misclassified.code,'UI_REFERENCE_REPRODUCTION_MISCLASSIFIED');
+assert.equal(misclassified.functionalGate,'PASS');
+
+// Positive: explicit UI_REFERENCE_REPRODUCTION classification is accepted and echoed back in the PASS summary.
+const correctlyClassified=validateCanonicalContract(refManifest,refState({taskTypes:['UI_REFERENCE_REPRODUCTION']}));
+assert.equal(correctlyClassified.contractGate,'PASS');
+assert.deepEqual(correctlyClassified.taskTypes,['UI_REFERENCE_REPRODUCTION']);
+
+// Positive (backward compatibility): a legacy work state without taskTypes remains valid when no CURRENT
+// REFERENCE_IMAGE design is selected/used (manifest()/state() only reference MACHINE_READABLE artifacts).
+const legacyPass=validateCanonicalContract(manifest(),state());
+assert.equal(legacyPass.contractGate,'PASS');
+assert.equal(legacyPass.taskTypes,undefined);
+
+// Negative: an unknown taskTypes entry is an invalid closed-schema work state, independent of REFERENCE_IMAGE use.
+const badTaskType=validateCanonicalContract(manifest(),state({taskTypes:['NOT_A_TASK_TYPE']}));
+assert.equal(badTaskType.code,'CANONICAL_WORK_STATE_INVALID');
+
+// Negative: an empty taskTypes array cannot be used to pass a non-reference task silently.
+const emptyTaskType=validateCanonicalContract(manifest(),state({taskTypes:[]}));
+assert.equal(emptyTaskType.code,'CANONICAL_WORK_STATE_INVALID');
+
 writeFileSync(join(refRoot,'PROJECT_CONTEXT.json'),JSON.stringify(refManifest,null,2));
 writeFileSync(join(refRoot,'docs','ui-reference','current','home.png'),'reference-image');
 writeFileSync(join(refRoot,'docs','ui-reference','CURRENT.json'),JSON.stringify({schemaVersion:1,references:[{
@@ -164,4 +207,4 @@ const refStop=spawnSync(process.execPath,[gatePath,'--context-file',join(refRoot
 assert.equal(refStop.status,2);
 assert.equal(JSON.parse(refStop.stdout).code,'UI_REFERENCE_SCOPE_MISMATCH');
 
-console.log('CANONICAL_CONTRACT_GATE_SELFTEST=PASS contract=A-G canonical_update=A-D ui_reference=PASS incident_fixture=STOP');
+console.log('CANONICAL_CONTRACT_GATE_SELFTEST=PASS contract=A-G canonical_update=A-D ui_reference=PASS incident_fixture=STOP task_type_classification=PASS+STOP legacy_compat=PASS');

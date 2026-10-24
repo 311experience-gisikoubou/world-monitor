@@ -5,8 +5,8 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { validateOrchestrationTask } from '../preflight-audit/implementation-orchestrator.mjs';
 import { normalizeHumanDecisionSync, validateHumanDecisionSync } from '../handoff/human-decision-sync.mjs';
-import { validateResearchEnvelopeShape } from '../preflight-audit/research-gate.mjs';
-import { validateInstructionClarityInput } from '../preflight-audit/instruction-clarity-gate.mjs';
+import { validateResearchEnvelopeShape, evaluateResearchEnvelope, blocksSourceWrite } from '../preflight-audit/research-gate.mjs';
+import { validateInstructionClarityInput, evaluateInstructionClarity } from '../preflight-audit/instruction-clarity-gate.mjs';
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,159}$/;
 const STATUSES = new Set(['DRAFT', 'PENDING_HUMAN', 'APPROVED', 'REJECTED']);
@@ -263,18 +263,13 @@ function bullets(items) { return items.map((item) => '- ' + item); }
 export function renderPollerIssueFromTask(taskPayload) {
   const errors = validateOrchestrationTask(taskPayload);
   if (errors.length > 0) return stop('PROJECT_INTAKE_JOB_TASK_INVALID', 'Orchestrator task payload is invalid.', { errors });
-  // validateOrchestrationTask only checks research's shape and that
-  // instructionClarity.taskId matches; the full instructionClarity shape
-  // (and research's full shape, re-asserted here for a direct caller that
-  // skipped the orchestrator) must also hold before this evidence is
-  // embedded for a downstream launcher to trust.
   const researchShapeErrors = validateResearchEnvelopeShape(taskPayload.research);
   if (researchShapeErrors.length > 0) {
-    return stop('PROJECT_INTAKE_JOB_RESEARCH_EVIDENCE_INVALID', 'research evidence failed full shape validation.', { errors: researchShapeErrors });
+    return stop('PROJECT_INTAKE_JOB_RESEARCH_EVIDENCE_INVALID', 'research envelope shape is invalid.', { errors: researchShapeErrors });
   }
   const clarityShapeErrors = validateInstructionClarityInput(taskPayload.instructionClarity);
   if (clarityShapeErrors.length > 0) {
-    return stop('PROJECT_INTAKE_JOB_INSTRUCTION_CLARITY_INVALID', 'instructionClarity failed full shape validation.', { errors: clarityShapeErrors });
+    return stop('PROJECT_INTAKE_JOB_INSTRUCTION_CLARITY_INVALID', 'instructionClarity shape is invalid.', { errors: clarityShapeErrors });
   }
   const objective = jobLine(taskPayload.objective);
   if (!objective) return stop('PROJECT_INTAKE_JOB_TEXT_UNSAFE', 'Objective cannot be rendered as a single safe line.');
@@ -299,6 +294,28 @@ export function renderPollerIssueFromTask(taskPayload) {
   const noForbidden = taskPayload.forbiddenScope === undefined || (Array.isArray(taskPayload.forbiddenScope) && taskPayload.forbiddenScope.length === 0);
   const forbidden = noForbidden ? [DEFAULT_PROHIBITION] : jobLines(taskPayload.forbiddenScope, jobPath);
   if (!forbidden) return stop('PROJECT_INTAKE_JOB_FORBIDDEN_SCOPE_REQUIRED', 'forbiddenScope entries must be renderable as paths.');
+  // validateOrchestrationTask and the shape checks above only check research's
+  // and instructionClarity's SHAPE (plus that instructionClarity.taskId
+  // matches payload.taskId); they never qualify whether that dossier is
+  // actually fresh and bound to THIS task/repository/scope, or whether
+  // InstructionClarity actually resolves to PROCEED. A direct caller of this
+  // renderer bypasses the Bridge's PREPARE qualification entirely, so a
+  // stale/foreign shape-valid dossier must be independently re-qualified
+  // here -- exactly as implementation-orchestrator.mjs's
+  // runImplementationOrchestration already does -- using the SAME existing
+  // exports, and deriving the expected taskId/repository/scope strictly from
+  // this already-validated taskPayload, never from the embedded evidence
+  // itself.
+  const instructionClarity = evaluateInstructionClarity(taskPayload.instructionClarity);
+  if (instructionClarity.result !== 'PROCEED') {
+    return stop('PROJECT_INTAKE_JOB_INSTRUCTION_CLARITY_NOT_CONFIRMED', 'instructionClarity did not resolve to PROCEED.', { instructionClarity });
+  }
+  const researchGate = evaluateResearchEnvelope(taskPayload.research, {
+    taskId: taskPayload.taskId, repository: taskPayload.repository, scope: taskPayload.allowedScope,
+  });
+  if (blocksSourceWrite(researchGate, { trialWriteMode: taskPayload.trialWriteMode, dataClass: taskPayload.dataClass })) {
+    return stop('PROJECT_INTAKE_JOB_RESEARCH_GATE_BLOCKED', 'Research gate blocked this task (stale, foreign, or unresolved evidence).', { researchGate });
+  }
   const promptText = promptLines.join('\n').trim();
   const lines = [
     encodeResearchEnvelope(taskPayload), '',

@@ -40,8 +40,9 @@ const {
   validateImplementationTask, runClaudeImplementationTask, implementationRunnerEvidence,
   readBoundedTaskInput, verifyFeatureRepository, verifyWorktreeClean, verifyRepositoryIdentity,
   readHeadSha, computeChangeSetSha256, validScopePattern, changedPathsWithinScope, changedPathsInForbiddenScope,
+  isProviderCapacityFailure,
 } = await import(pathToFileURL(testImplPath).href);
-const { computeConstraintsDigest } = await import(researchGateUrl);
+const { computeConstraintsDigest, CHECKLIST_IDS, TRIGGER_KEYS, BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE } = await import(researchGateUrl);
 
 function minimalPassChecklist() {
   return ['safety', 'dataPreservation', 'existingOverlap'].map((id) => ({
@@ -87,6 +88,24 @@ function researchFor(taskId, overrides = {}) {
   };
 }
 
+function trialResearchFor(taskId, overrides = {}) {
+  const repository = overrides.repository || { owner: 'acme', name: 'widgets' };
+  const scope = overrides.scope || ['README.md', 'IMPL_TOUCHED.txt'];
+  const constraints = overrides.constraints || [];
+  return {
+    evidence: {
+      schemaVersion: 1,
+      evidenceBinding: { taskId, proposalId: 'proposal-1', repository, scope, constraints, constraintsDigestSha256: computeConstraintsDigest(constraints), assessedAtUtcMs: Date.now(), maxEvidenceAgeMs: 24 * 60 * 60 * 1000 },
+      triggers: Object.fromEntries(TRIGGER_KEYS.map((key) => [key, key === 'osBrowserCompatibility'])),
+      noTriggerAssessment: null,
+      checklist: CHECKLIST_IDS.map((id) => ({ id, status: id === 'browserCompatibility' ? 'UNKNOWN' : 'PASS', applicable: true, justification: `Trial evidence for ${id}.`, ...(id === 'browserCompatibility' ? {} : { primarySourceRef: 'https://example.invalid/evidence' }) })),
+      humanTopConditions: [],
+      deepResearch: { primary: { providerId: 'provider-a', researchSessionRef: 'research-session://primary/a', evidenceRef: 'research-note://primary' }, adversarial: { present: true, providerId: 'provider-b', researchSessionRef: 'research-session://adversarial/b', distinctFromPrimary: true, evidenceRef: 'research-note://adversarial' } },
+    },
+    context: { proposalId: 'proposal-1', constraints, humanTopConditions: [] },
+  };
+}
+
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 function git(cwd, args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true });
@@ -102,7 +121,7 @@ async function expectCode(promise, code) {
 try {
   // --- schema validation ---
   const basePayload = {
-    schemaVersion: 1, taskId: 'impl-1', capability: 'implementation', dataClass: 'source-only',
+    schemaVersion: 1, taskId: 'impl-1', capability: 'implementation', dataClass: 'synthetic', trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE,
     prompt: 'Fix the bug in source only.', repoRoot: tempRoot, branch: 'feat/example',
     allowedScope: ['README.md', 'src/**'], repository: { owner: 'acme', name: 'widgets' },
     research: researchFor('impl-1', { scope: ['README.md', 'src/**'] }),
@@ -112,6 +131,7 @@ try {
     'the direct exported source writer must never be bypassable by omitting the research envelope');
   assert(validateImplementationTask({ ...basePayload, extra: 1 }).includes('unknown_field'), 'unknown field must stop');
   assert(validateImplementationTask({ ...basePayload, dataClass: 'protected' }).includes('dataClass_invalid'), 'protected data must stop');
+  assert(validateImplementationTask({ ...basePayload, trialWriteMode: 'UNBOUNDED' }).includes('trialWriteMode_invalid'), 'unknown trial mode must stop');
   assert(validateImplementationTask({ ...basePayload, branch: 'main' }).length === 0, 'branch schema does not itself reject protected names (repo check does)');
   assert(validateImplementationTask({ ...basePayload, branch: '../evil' }).includes('branch_invalid'), 'unsafe branch token must stop');
   assert(validateImplementationTask({ ...basePayload, allowedScope: [] }).includes('allowedScope_invalid'), 'empty allowedScope must stop');
@@ -202,6 +222,55 @@ try {
   const identityNonGithub = verifyRepositoryIdentity(nonGithubRepoDir, 'acme', 'widgets');
   assert(identityNonGithub.ok === false && identityNonGithub.code === 'ORIGIN_REMOTE_NOT_GITHUB_SHAPED', 'a non-GitHub-shaped origin must fail closed rather than being loosely parsed');
 
+  // --- real-Git autocrlf/BOM parity: computeChangeSetSha256 must hash the
+  // exact attribute/filter-aware blob OID Git itself would stage/commit, not
+  // raw on-disk bytes, for a BOM+CRLF file under core.autocrlf=true -- and
+  // the working-tree proof must never mutate the repository's real index.
+  // This is a fully independent, isolated throwaway repo; it never touches
+  // the `repoDir` used by the fake-CLI scenario below.
+  const crlfRepoDir = path.join(tempRoot, 'crlf-autocrlf-repo');
+  fs.mkdirSync(crlfRepoDir, { recursive: true });
+  git(crlfRepoDir, ['init', '-q']);
+  git(crlfRepoDir, ['config', 'user.email', 'test@example.invalid']);
+  git(crlfRepoDir, ['config', 'user.name', 'Test']);
+  git(crlfRepoDir, ['config', 'core.autocrlf', 'false']);
+  const bomCrlf = (lines) => '﻿' + lines.map((l) => l + '\r\n').join('');
+  fs.writeFileSync(path.join(crlfRepoDir, 'fixture.ps1'), bomCrlf(['line1', 'line2']), 'utf8');
+  git(crlfRepoDir, ['add', 'fixture.ps1']);
+  git(crlfRepoDir, ['commit', '-q', '-m', 'initial BOM+CRLF fixture']);
+  const crlfPreHead = readHeadSha(crlfRepoDir);
+  assert(/^[0-9a-f]{40}$/.test(crlfPreHead || ''), 'crlfPreHead must be a real 40-char sha');
+  const crlfIndexBeforeProof = git(crlfRepoDir, ['ls-files', '--stage']);
+
+  git(crlfRepoDir, ['config', 'core.autocrlf', 'true']);
+  fs.writeFileSync(path.join(crlfRepoDir, 'fixture.ps1'), bomCrlf(['line1', 'line2', 'line3']), 'utf8');
+  fs.writeFileSync(path.join(crlfRepoDir, 'new.ps1'), bomCrlf(['newline1', 'newline2']), 'utf8');
+
+  const crlfWorkingProof = computeChangeSetSha256(crlfRepoDir, crlfPreHead);
+  assert(crlfWorkingProof !== null, 'working-tree change-set proof must succeed for a clean preHead-matching autocrlf repo');
+  assert(JSON.stringify(crlfWorkingProof.changedPaths.slice().sort()) === JSON.stringify(['fixture.ps1', 'new.ps1']),
+    `expected exact sorted changedPaths [fixture.ps1, new.ps1], got ${JSON.stringify(crlfWorkingProof.changedPaths)}`);
+
+  const crlfIndexAfterProof = git(crlfRepoDir, ['ls-files', '--stage']);
+  assert(crlfIndexAfterProof === crlfIndexBeforeProof, 'the real index must be byte-for-byte unchanged after the working-tree change-set proof');
+
+  git(crlfRepoDir, ['add', 'fixture.ps1', 'new.ps1']);
+  git(crlfRepoDir, ['commit', '-q', '-m', 'autocrlf BOM+CRLF edit and new file']);
+  const crlfPostHead = readHeadSha(crlfRepoDir);
+  assert(/^[0-9a-f]{40}$/.test(crlfPostHead || ''), 'crlfPostHead must be a real 40-char sha');
+  assert(crlfPostHead !== crlfPreHead, 'the commit must have actually advanced HEAD');
+
+  const crlfCommittedProof = computeChangeSetSha256(crlfRepoDir, crlfPreHead, crlfPostHead);
+  assert(crlfCommittedProof !== null, 'committed change-set proof must succeed');
+  assert(crlfCommittedProof.changeSetSha256 === crlfWorkingProof.changeSetSha256,
+    `committed autocrlf change-set hash must exactly equal the earlier working-tree hash: ${JSON.stringify(crlfCommittedProof)} vs ${JSON.stringify(crlfWorkingProof)}`);
+
+  // HEAD no longer equals crlfPreHead (we just committed), so working-tree
+  // mode (toRef omitted) must fail closed rather than silently recomputing
+  // against the wrong base.
+  const crlfHeadMismatch = computeChangeSetSha256(crlfRepoDir, crlfPreHead);
+  assert(crlfHeadMismatch === null, 'working-tree mode must fail closed (return null) when HEAD no longer equals the supplied preHead');
+
   // --- fake CLI end-to-end run against the real repo: modifies an existing file AND creates a new one ---
   const logPath = path.join(tempRoot, 'fake-log.jsonl');
   const fakeCli = path.join(tempRoot, 'fake-claude.mjs');
@@ -232,6 +301,18 @@ process.stdin.on('data', (chunk) => { input += chunk; });
 process.stdin.on('end', () => {
   record('run', input);
   if (mode === 'fail') { console.error('SECRET_STDERR_SHOULD_NOT_LEAK'); process.exit(7); }
+  if (mode === 'capacity') {
+    console.error("You've hit your session limit · resets 4:50pm (Asia/Tokyo)");
+    process.exit(1);
+  }
+  if (mode === 'capacity-usage-reached') {
+    console.error('Usage limit reached. Your usage limit will reset at 09:00 UTC.');
+    process.exit(1);
+  }
+  if (mode === 'nearmiss-limit') {
+    console.error('API rate limit middleware error: request limit configuration invalid');
+    process.exit(1);
+  }
   if (mode === 'outofscope') {
     fs.writeFileSync('OUT_OF_SCOPE.txt', 'not allowed\\n', 'utf8');
     console.log(JSON.stringify({ type:'result', subtype:'success', is_error:false, result:'Edited an out-of-scope file' }));
@@ -256,10 +337,10 @@ process.stdin.on('end', () => {
   const desc = (mode = 'ok') => ({ file: process.execPath, prefix: [fakeCli, mode] });
 
   const implPayload = {
-    schemaVersion: 1, taskId: 'impl-1', capability: 'implementation', dataClass: 'source-only',
+    schemaVersion: 1, taskId: 'impl-1', capability: 'implementation', dataClass: 'synthetic', trialWriteMode: BOUNDED_SYNTHETIC_TRIAL_WRITE_MODE,
     prompt: 'Fix the bug in source only.', repoRoot: repoDir, branch: 'feat/example',
     allowedScope: ['README.md', 'IMPL_TOUCHED.txt'], repository: { owner: 'acme', name: 'widgets' },
-    research: researchFor('impl-1'),
+    research: trialResearchFor('impl-1'),
   };
 
   // --- Research Gate blocks BEFORE any provider probe/invocation: the direct runner cannot be bypassed ---
@@ -294,7 +375,7 @@ process.stdin.on('end', () => {
 
   const ok = runClaudeImplementationTask(implPayload, { desc: desc(), envSource: cleanEnv, timeoutMs: 5000 });
   assert(ok.result === 'COMPLETED', JSON.stringify(ok));
-  assert(ok.researchGate?.result === 'BYPASS_LIGHT', `completed run must record its actual re-evaluated research gate result: ${JSON.stringify(ok.researchGate)}`);
+  assert(ok.researchGate?.result === 'TRIAL_REQUIRED', `completed run must record its actual bounded trial research result: ${JSON.stringify(ok.researchGate)}`);
   assert(ok.output === 'Edited README.md and added IMPL_TOUCHED.txt', JSON.stringify(ok));
   assert(ok.evidence.toolBoundary === 'SOURCE_EDIT_ONLY_ENFORCED', 'tool evidence not closed');
   assert(ok.evidence.repositoryBoundary === 'FEATURE_BRANCH_ONLY_VERIFIED', 'repository evidence not closed');
@@ -386,6 +467,32 @@ process.stdin.on('end', () => {
   const failed = runClaudeImplementationTask(implPayload, { desc: desc('fail'), envSource: cleanEnv, timeoutMs: 5000 });
   assert(failed.code === 'PROVIDER_STOPPED' && !JSON.stringify(failed).includes('SECRET_STDERR_SHOULD_NOT_LEAK'), 'stderr must not leak');
   assert(verifyWorktreeClean(repoDir).ok === true, 'worktree must be clean again before the protected-scope test');
+
+  // --- provider capacity classification: narrow, unmistakable only, never leaking raw provider text ---
+  assert(isProviderCapacityFailure("You've hit your session limit · resets 4:50pm (Asia/Tokyo)") === true,
+    'the real current Claude session-limit wording must be recognized as capacity');
+  assert(isProviderCapacityFailure('Usage limit reached. Your usage limit will reset at 09:00 UTC.') === true,
+    'a usage-limit-reached + reset wording must be recognized as capacity');
+  assert(isProviderCapacityFailure('API rate limit middleware error: request limit configuration invalid') === false,
+    'a mention of "limit" with no reset/retry context must not be misclassified as capacity');
+  assert(isProviderCapacityFailure('Error: ECONNRESET while calling provider') === false,
+    'an unrelated transport error must not be misclassified as capacity');
+  assert(isProviderCapacityFailure('') === false, 'empty text must not be misclassified as capacity');
+
+  const capacityStop = runClaudeImplementationTask(implPayload, { desc: desc('capacity'), envSource: cleanEnv, timeoutMs: 5000 });
+  assert(capacityStop.result === 'STOP' && capacityStop.code === 'PROVIDER_CAPACITY_UNAVAILABLE',
+    `the real current session-limit wording must classify as PROVIDER_CAPACITY_UNAVAILABLE: ${JSON.stringify(capacityStop)}`);
+  assert(!JSON.stringify(capacityStop).includes('session limit') && !JSON.stringify(capacityStop).includes('Asia/Tokyo'),
+    'raw provider capacity wording must never be leaked into the returned STOP result');
+  assert(verifyWorktreeClean(repoDir).ok === true, 'worktree must be clean again after the capacity test');
+
+  const capacityUsageStop = runClaudeImplementationTask(implPayload, { desc: desc('capacity-usage-reached'), envSource: cleanEnv, timeoutMs: 5000 });
+  assert(capacityUsageStop.code === 'PROVIDER_CAPACITY_UNAVAILABLE', `usage-limit-reached wording must classify as capacity: ${JSON.stringify(capacityUsageStop)}`);
+  assert(verifyWorktreeClean(repoDir).ok === true, 'worktree must be clean again after the usage-limit capacity test');
+
+  const nearMissStop = runClaudeImplementationTask(implPayload, { desc: desc('nearmiss-limit'), envSource: cleanEnv, timeoutMs: 5000 });
+  assert(nearMissStop.code === 'PROVIDER_STOPPED', `an unrelated "limit" mention without reset context must stay PROVIDER_STOPPED: ${JSON.stringify(nearMissStop)}`);
+  assert(verifyWorktreeClean(repoDir).ok === true, 'worktree must be clean again after the near-miss test');
 
   // --- protected-file edit STOP: even an allowed path cannot be changed when forbiddenScope protects it ---
   const forbiddenStop = runClaudeImplementationTask({ ...implPayload, forbiddenScope: ['README.md'] }, { desc: desc('forbidden'), envSource: cleanEnv, timeoutMs: 5000 });

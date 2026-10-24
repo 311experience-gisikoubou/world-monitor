@@ -345,4 +345,44 @@ const deterministic = input(
 );
 assert.equal(evaluate(deterministic).receiptId, evaluate(deterministic).receiptId);
 
+// A browser-issued FINAL UI receipt must not be forgeable into a native-execution claim:
+// verification must reject it even with a correctly recomputed receiptId.
+const browserFinalUiReceipt = evaluate(input(
+  'FINAL_REALITY_CHECK', ['UI'],
+  [finalEv('GIT_STATE'), finalEv('DIFF'), finalEv('SCREENSHOT'), cleanupEv(G), finalEv('TEST_GATE_RESULT')],
+  { scopeMatch: true, structureMatch: true, implementationComplete: true, deliverableMatch: true },
+  G,
+));
+assert.equal(browserFinalUiReceipt.result, 'PASS');
+
+const forgedNativeReceipt = {
+  ...browserFinalUiReceipt,
+  identity: {
+    ...browserFinalUiReceipt.identity,
+    executionSurfaceExpected: 'Tauri native',
+    executionSurfaceObserved: 'Tauri native',
+  },
+};
+delete forgedNativeReceipt.receiptId;
+const forgedNativeCore = {
+  schemaVersion: forgedNativeReceipt.schemaVersion,
+  receiptType: forgedNativeReceipt.receiptType,
+  result: forgedNativeReceipt.result,
+  code: forgedNativeReceipt.code,
+  phase: forgedNativeReceipt.phase,
+  stateId: forgedNativeReceipt.stateId,
+  taskTypes: forgedNativeReceipt.taskTypes,
+  authority: forgedNativeReceipt.authority,
+  actors: forgedNativeReceipt.actors,
+  identity: forgedNativeReceipt.identity,
+  checkpoint: forgedNativeReceipt.checkpoint,
+  evidence: forgedNativeReceipt.evidence,
+  requiredEvidence: forgedNativeReceipt.requiredEvidence,
+};
+forgedNativeReceipt.receiptId = createHash('sha256').update(JSON.stringify(forgedNativeCore)).digest('hex');
+assert.equal(
+  verifyStagedRealityReceipt(forgedNativeReceipt, G, { requireFinal: true, requireUi: true }).code,
+  'NATIVE_FINAL_ISSUER_NOT_PROVEN',
+);
+
 console.log('staged-reality-gate selftest: PASS');
